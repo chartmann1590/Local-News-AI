@@ -16,7 +16,8 @@ This folder holds the in‑depth docs. The root README gives a friendly overview
 ## Feature Summary (context)
 
 - Auto location detection with manual override
-- Scheduled harvesting + Ollama rewrites (single‑threaded, progress tracked)
+- Scheduled harvesting + Ollama rewrites (single-threaded, progress tracked)
 - Weather forecast with icons and radar
 - Smart dedup (title + image) after each run, plus manual action
 - Pagination (10/page), friendly UI
+- Optional Text-to-Speech (OpenTTS/Piper) with in-app voice selection and audio playback for articles and weather

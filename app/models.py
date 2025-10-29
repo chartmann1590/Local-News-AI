@@ -29,6 +29,16 @@ class AppSettings(Base):
     updated_at: Mapped[DateTime | None] = mapped_column(DateTime, nullable=True)
 
 
+class TTSSettings(Base):
+    __tablename__ = "tts_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    voice: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    speed: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0.5-2.0
+
+
 class Article(Base):
     __tablename__ = "articles"
 

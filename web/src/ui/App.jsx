@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react'
+import AudioPlayer from './AudioPlayer.jsx'
 import { SkeletonCard } from './Skeleton.jsx'
 
 function Header({ location, onRunNow, running, onOpenSettings }) {
@@ -22,7 +23,7 @@ function Header({ location, onRunNow, running, onOpenSettings }) {
   )
 }
 
-function Weather({ weather }) {
+function Weather({ weather, tts }) {
   const days = weather?.forecast?.daily?.time?.length || 0
   const codes = weather?.forecast?.daily?.weathercode || []
   const dailyMax = weather?.forecast?.daily?.temperature_2m_max || []
@@ -57,6 +58,11 @@ function Weather({ weather }) {
           <div className="prose dark:prose-invert max-w-none" dangerouslySetInnerHTML={{__html: weather.report.replaceAll('\n','<br/>')}} />
         ) : (
           <div className="text-slate-500">Weather report is generating…</div>
+        )}
+        {tts?.enabled && weather?.report && (
+          <div className="mt-2">
+            <AudioPlayer fetchUrl={`/api/tts/weather?${tts?.voice ? ('voice='+encodeURIComponent(tts.voice)+'&') : ''}ts=${encodeURIComponent(weather.updated_at||'')}`} />
+          </div>
         )}
         {days > 0 && (
           <div className="mt-4 text-sm">
@@ -93,7 +99,7 @@ function Weather({ weather }) {
   )
 }
 
-function ArticleCard({ a }) {
+function ArticleCard({ a, tts }) {
   const preview = useMemo(() => (a.preview || (a.ai_body || '')).slice(0, 500), [a])
   const hasMore = (a.ai_body || '').length > preview.length
   const [open, setOpen] = useState(false)
@@ -125,6 +131,11 @@ function ArticleCard({ a }) {
         <div className="mt-3 text-sm">
           <a href={a.source_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">Source: View original article</a>
         </div>
+        {tts?.enabled && a?.ai_body && (
+          <div className="mt-3">
+            <AudioPlayer fetchUrl={`/api/tts/article/${a.id}?${tts?.voice ? ('voice='+encodeURIComponent(tts.voice)+'&') : ''}ts=${encodeURIComponent(a.fetched_at||'')}`} />
+          </div>
+        )}
       </div>
     </article>
   )
@@ -160,6 +171,7 @@ export default function App() {
   const [config, setConfig] = useState(null)
   const [weather, setWeather] = useState(null)
   const [articles, setArticles] = useState([])
+  const [tts, setTts] = useState(null)
   const [page, setPage] = useState(1)
   const [pages, setPages] = useState(1)
   const pageSize = 10
@@ -170,13 +182,15 @@ export default function App() {
   async function loadAll() {
     const t0 = performance.now()
     try {
-      const [cfgR, wR, aR] = await Promise.all([
+      const [cfgR, wR, aR, ttsR] = await Promise.all([
         fetch('/api/config').then(r => r.json()),
         fetch('/api/weather').then(r => r.json()),
         fetch(`/api/articles?page=${page}&limit=${pageSize}`).then(r => r.json()),
+        fetch('/api/tts/settings').then(r => r.json()).catch(()=>null),
       ])
       setConfig(cfgR)
       setWeather(wR)
+      if (ttsR) setTts(ttsR)
       const items = (aR.items || aR || []).map(a => ({
         ...a,
         title: a.title || a.source_title || 'Untitled',
@@ -263,7 +277,7 @@ export default function App() {
       <LocationBar config={config} onChange={changeLocation} />
       <main className="max-w-[1100px] mx-auto px-4 py-6">
         <div className="grid md:grid-cols-3 gap-6">
-          <Weather weather={weather} />
+          <Weather weather={weather} tts={tts} />
           <section className="md:col-span-2 space-y-4">
             <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200/60 dark:border-slate-700/60">
               <div className="p-5 border-b border-slate-200/60 dark:border-slate-700/60 flex items-center gap-2">
@@ -280,7 +294,7 @@ export default function App() {
               </div>
             </div>
             {articles.length > 0 ? (
-              articles.map(a => <ArticleCard key={a.id} a={a} />)
+              articles.map(a => <ArticleCard key={a.id} a={a} tts={tts} />)
             ) : showSkeletons ? (
               <>
                 <SkeletonCard lines={5} />
@@ -425,10 +439,21 @@ function MaintenanceBar({ onAfterAction }) {
 }
 
 function SettingsPanel({ onClose, reloadAll }) {
-  const [form, setForm] = useState({ ollama_base_url: '', ollama_model: '', temp_unit: 'F' })
+  const [form, setForm] = useState({
+    ollama_base_url: '',
+    ollama_model: '',
+    temp_unit: 'F',
+    tts_enabled: false,
+    tts_base_url: '',
+    tts_voice: '',
+    tts_speed: 1.0,
+  })
   const [models, setModels] = useState([])
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState(null)
+  const [voices, setVoices] = useState([])
+  const [previewUrl, setPreviewUrl] = useState('')
+  const [pvBusy, setPvBusy] = useState(false)
   // Maintenance state in Settings
   const [mBusy, setMBusy] = useState(false)
   const [mMsg, setMMsg] = useState('')
@@ -438,15 +463,23 @@ function SettingsPanel({ onClose, reloadAll }) {
     ;(async () => {
       try {
         const s = await fetch('/api/settings').then(r => r.json())
-        setForm({
+        const ts = await fetch('/api/tts/settings').then(r => r.json()).catch(()=>({}))
+        setForm(f => ({
+          ...f,
           ollama_base_url: s.ollama_base_url || '',
           ollama_model: s.ollama_model || '',
           temp_unit: s.temp_unit || 'F',
-        })
+          tts_enabled: !!ts.enabled,
+          tts_base_url: ts.base_url || 'http://tts:5500',
+          tts_voice: ts.voice || '',
+          tts_speed: ts.speed || 1.0,
+        }))
         if (s.ollama_base_url) {
           const m = await fetch('/api/ollama/models?base_url=' + encodeURIComponent(s.ollama_base_url)).then(r => r.json())
           setModels(m.models || [])
         }
+        const v = await fetch('/api/tts/voices' + (ts.base_url ? ('?base_url='+encodeURIComponent(ts.base_url)) : '')).then(r => r.json()).catch(()=>null)
+        if (v && Array.isArray(v.voices)) setVoices(v.voices)
       } catch (e) {
         // eslint-disable-next-line no-console
         console.error('settings load failed', e)
@@ -474,12 +507,54 @@ function SettingsPanel({ onClose, reloadAll }) {
 
   async function saveSettings() {
     try {
-      await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
+      await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+        ollama_base_url: form.ollama_base_url,
+        ollama_model: form.ollama_model,
+        temp_unit: form.temp_unit,
+      }) })
+      // Persist TTS settings separately
+      await fetch('/api/tts/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+        enabled: !!form.tts_enabled,
+        base_url: form.tts_base_url,
+        voice: form.tts_voice || null,
+        speed: form.tts_speed || 1.0,
+      }) })
       await reloadAll()
       onClose()
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('save settings failed', e)
+    }
+  }
+
+  async function refreshVoices() {
+    try {
+      const v = await fetch('/api/tts/voices' + (form.tts_base_url ? ('?base_url='+encodeURIComponent(form.tts_base_url)) : '')).then(r=>r.json())
+      setVoices(v.voices || [])
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('voice load failed', e)
+    }
+  }
+
+  async function previewTts() {
+    setPvBusy(true)
+    setPreviewUrl('')
+    try {
+      const res = await fetch('/api/tts/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+        text: 'This is a voice preview for Local News and Weather.',
+        voice: form.tts_voice || null,
+        base_url: form.tts_base_url || null,
+      }) })
+      if (!res.ok) throw new Error('preview failed')
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      setPreviewUrl(url)
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('tts preview failed', e)
+    } finally {
+      setPvBusy(false)
     }
   }
 
@@ -543,8 +618,8 @@ function SettingsPanel({ onClose, reloadAll }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-2xl rounded-xl bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-700/60 shadow-lg">
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto">
+      <div className="w-full max-w-2xl my-6 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-700/60 shadow-lg max-h-[85vh] overflow-y-auto">
         <div className="px-5 py-4 border-b border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between">
           <div className="font-semibold">Settings</div>
           <button onClick={onClose} className="text-slate-600 hover:text-slate-900 dark:text-slate-300">✕</button>
@@ -564,6 +639,30 @@ function SettingsPanel({ onClose, reloadAll }) {
                 {models.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             </div>
+          </section>
+
+          <section>
+            <div className="font-medium mb-2">Text-to-Speech</div>
+            <div className="flex items-center gap-3 mb-2">
+              <label className="inline-flex items-center gap-2"><input type="checkbox" checked={!!form.tts_enabled} onChange={e=>setForm(f=>({...f, tts_enabled: e.target.checked}))}/> <span>Enable TTS</span></label>
+            </div>
+            <div className="flex items-center gap-2">
+              <input value={form.tts_base_url} onChange={e=>setForm(f=>({...f, tts_base_url: e.target.value}))} placeholder="http://tts:5500" className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 flex-1" />
+              <button onClick={refreshVoices} className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700">Refresh Voices</button>
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <label className="text-sm text-slate-600 dark:text-slate-300 mr-2">Voice</label>
+              <select value={form.tts_voice} onChange={e=>setForm(f=>({...f, tts_voice: e.target.value}))} className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800">
+                <option value="">(auto)</option>
+                {voices.map(v => <option key={v.name} value={v.name}>{(v.label||v.name)}{v.locale?` · ${v.locale}`:''}</option>)}
+              </select>
+              <button onClick={previewTts} className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700" disabled={pvBusy || !form.tts_enabled}>{pvBusy ? 'Preview…' : 'Preview'}</button>
+            </div>
+            {previewUrl && (
+              <div className="mt-2">
+                <AudioPlayer src={previewUrl} />
+              </div>
+            )}
           </section>
 
           <section>
@@ -614,3 +713,4 @@ function SettingsPanel({ onClose, reloadAll }) {
     </div>
   )
 }
+

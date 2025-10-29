@@ -16,7 +16,7 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
   - Returns paginated articles.
   - Query params: `page` (default 1), `limit` (default 10, max 100).
   - Response: `{ items, page, limit, total, pages }` where each item includes:
-    - `id`, `title`, `source`, `source_url`, `image_url`, `published_at`, `fetched_at`, `ai_model`, `ai_body`, `rewrite_note`, `byline` (present for non‑fallback AI articles).
+    - `id`, `title`, `source`, `source_url`, `image_url`, `published_at`, `fetched_at`, `ai_model`, `ai_body`, `rewrite_note`, `byline` (present for non-fallback AI articles).
 
 ## Harvest & Jobs
 
@@ -49,7 +49,7 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
   - Body: `{ location: "City, State or ZIP" }`.
   - Sets the active location and triggers a weather refresh in the background.
 - POST `/api/location/auto`
-  - Attempts to auto‑detect location (IP geolocation). Triggers weather refresh.
+  - Attempts to auto-detect location (IP geolocation). Triggers weather refresh.
 
 ## Maintenance
 
@@ -57,8 +57,26 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
   - Removes duplicate `Article` rows grouped by normalized title and (in a second pass) by normalized image URL.
   - Returns `{ status: "ok", deleted, kept_groups }`.
 - POST `/api/maintenance/rewrite-missing?limit=50`
-  - Re‑queues rewrites for articles with missing AI text or fallback AI.
+  - Re-queues rewrites for articles with missing AI text or fallback AI.
   - Returns `{ status: "queued" }` (runs in background).
+
+## Text-to-Speech (TTS)
+
+- GET `/api/tts/settings`
+  - Returns `{ enabled, base_url, voice, speed }`.
+- POST `/api/tts/settings`
+  - Body fields (all optional): `enabled` (bool), `base_url` (string), `voice` (string), `speed` (0.5–2.0).
+  - Enabling TTS unlocks audio playback for articles and weather in the UI.
+- GET `/api/tts/voices?base_url=http://...`
+  - Returns `{ voices: [ { name, label, locale?, engine? }, ... ] }`.
+  - Useful for populating a voice dropdown; `base_url` overrides the saved setting.
+- GET `/api/tts/article/{id}?voice=name`
+  - Streams `audio/wav` for an article’s AI body (requires TTS enabled).
+- GET `/api/tts/weather?voice=name`
+  - Streams `audio/wav` for the latest AI weather report (requires TTS enabled).
+- POST `/api/tts/preview`
+  - Body: `{ text, base_url?, voice? }`.
+  - Streams `audio/wav` for an ad-hoc preview (requires TTS enabled).
 
 ## Ollama Utilities
 
@@ -72,4 +90,3 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
 
 - GET `/health`
   - Returns `{ ok: true, time: "..." }`.
-

@@ -13,11 +13,16 @@ docker compose up --build -d
 - App HTTP port: 18080 (host) → 8000 (container)
 - Data volume: `./data:/data`
 
+### TTS Service (OpenTTS)
+
+- The Compose file includes a TTS container (`synesthesiam/opentts`) for offline voices (Piper engine).
+- The app reaches it at `http://tts:5500` on the internal Docker network (no host port is published by default).
+- Voice cache is stored under `./data/tts` to persist downloads between runs.
+
 ## Environment Files
 
 You can move environment values to a `.env` file and reference them from `docker-compose.yml` for easier updates.
 
 ## System Service
 
-For auto‑start on boot, use your host’s service manager (e.g., a systemd unit that runs `docker compose up -d` in the repo directory).
-
+For auto-start on boot, use your host’s service manager (e.g., a systemd unit that runs `docker compose up -d` in the repo directory).

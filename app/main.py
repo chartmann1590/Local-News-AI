@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -14,7 +14,7 @@ import logging
 import time
 
 from .database import init_db, SessionLocal
-from .models import Article, WeatherReport, AppConfig, AppSettings
+from .models import Article, WeatherReport, AppConfig, AppSettings, TTSSettings
 from .scheduler import start_scheduler, run_harvest_once
 from . import maintenance
 import threading
@@ -22,6 +22,7 @@ from .geo import resolve_location, set_location, auto_set_location
 from .progress import progress
 from . import scheduler as scheduler_mod
 from urllib.parse import urlparse, urlunparse
+from .tts import TTSClient, DEFAULT_TTS_BASE
 
 
 # ----- Logging setup (container stdout) -----
@@ -91,6 +92,24 @@ def _normalize_ollama_base(url: Optional[str]) -> Optional[str]:
         if host.startswith("localhost") or host.startswith("127.0.0.1"):
             host = host.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
         norm = urlunparse((scheme, host, path, "", "", ""))
+        return norm.rstrip("/")
+    except Exception:
+        return url
+
+
+def _normalize_tts_base(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    try:
+        u = urlparse(url)
+        scheme = u.scheme or "http"
+        netloc = u.netloc or u.path
+        if not netloc:
+            return None
+        host = netloc
+        if host.startswith("localhost") or host.startswith("127.0.0.1"):
+            host = host.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
+        norm = urlunparse((scheme, host, "", "", "", ""))
         return norm.rstrip("/")
     except Exception:
         return url
@@ -469,6 +488,156 @@ def api_ollama_models(base_url: Optional[str] = None):
         return {"models": models}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ----- TTS endpoints -----
+
+@app.get("/api/tts/settings")
+def api_tts_get_settings():
+    session = SessionLocal()
+    try:
+        s = session.query(TTSSettings).filter_by(id=1).one_or_none()
+        return {
+            "enabled": bool(s.enabled) if s else False,
+            "base_url": s.base_url if s and s.base_url else DEFAULT_TTS_BASE,
+            "voice": s.voice if s else None,
+            "speed": s.speed if s and s.speed else 1.0,
+        }
+    finally:
+        session.close()
+
+
+@app.post("/api/tts/settings")
+def api_tts_set_settings(payload: dict):
+    session = SessionLocal()
+    try:
+        s = session.query(TTSSettings).filter_by(id=1).one_or_none()
+        if not s:
+            s = TTSSettings(id=1)
+        if payload is None:
+            payload = {}
+        if "enabled" in payload:
+            s.enabled = bool(payload.get("enabled"))
+        if "base_url" in payload:
+            s.base_url = _normalize_tts_base((payload.get("base_url") or None))
+        if "voice" in payload:
+            s.voice = (payload.get("voice") or None)
+        if "speed" in payload:
+            try:
+                val = float(payload.get("speed"))
+                s.speed = max(0.5, min(2.0, val))
+            except Exception:
+                pass
+        session.merge(s)
+        session.commit()
+        return {"status": "ok"}
+    finally:
+        session.close()
+
+
+@app.get("/api/tts/voices")
+def api_tts_voices(base_url: Optional[str] = None):
+    # Prefer explicit base_url arg; fall back to settings; then env default
+    session = SessionLocal()
+    try:
+        s = session.query(TTSSettings).filter_by(id=1).one_or_none()
+        b = _normalize_tts_base(base_url) or (s.base_url if s and s.base_url else DEFAULT_TTS_BASE)
+    finally:
+        session.close()
+    client = TTSClient(base_url=b)
+    voices = client.list_voices()
+    if voices is None:
+        return JSONResponse(status_code=502, content={"error": "cannot reach tts server"})
+    out = []
+    for v in voices:
+        if not isinstance(v, dict):
+            continue
+        # Prefer canonical key for API usage and friendly label for UI
+        key = v.get("key") or v.get("id") or v.get("name")
+        label = v.get("name") or key
+        if key:
+            out.append({
+                "name": key,
+                "label": label,
+                "locale": v.get("locale") or v.get("lang") or None,
+                "engine": v.get("engine") or v.get("tts_name") or v.get("type") or None,
+            })
+    return {"voices": out}
+
+
+@app.get("/api/tts/article/{article_id}")
+def api_tts_article(article_id: int, voice: Optional[str] = None):
+    # Load TTS settings
+    session = SessionLocal()
+    try:
+        tset = session.query(TTSSettings).filter_by(id=1).one_or_none()
+        if not tset or not tset.enabled:
+            return JSONResponse(status_code=400, content={"error": "tts not enabled"})
+        a = session.query(Article).filter_by(id=article_id).one_or_none()
+        if not a or not a.ai_body:
+            return JSONResponse(status_code=404, content={"error": "article not found or empty"})
+        txt = a.ai_body
+        vv = voice or (tset.voice or None)
+        base = tset.base_url or DEFAULT_TTS_BASE
+    finally:
+        session.close()
+    client = TTSClient(base_url=base)
+    wav = client.synthesize_wav(txt, voice=vv)
+    if wav is None:
+        return JSONResponse(status_code=502, content={"error": "tts synthesis failed"})
+    return Response(content=wav, media_type="audio/wav")
+
+
+@app.get("/api/tts/weather")
+def api_tts_weather(voice: Optional[str] = None):
+    session = SessionLocal()
+    try:
+        tset = session.query(TTSSettings).filter_by(id=1).one_or_none()
+        if not tset or not tset.enabled:
+            return JSONResponse(status_code=400, content={"error": "tts not enabled"})
+        w = (
+            session.query(WeatherReport)
+            .order_by(WeatherReport.fetched_at.desc())
+            .limit(1)
+            .one_or_none()
+        )
+        if not w or not w.ai_report:
+            return JSONResponse(status_code=404, content={"error": "weather report not found or empty"})
+        txt = w.ai_report
+        vv = voice or (tset.voice or None)
+        base = tset.base_url or DEFAULT_TTS_BASE
+    finally:
+        session.close()
+    client = TTSClient(base_url=base)
+    wav = client.synthesize_wav(txt, voice=vv)
+    if wav is None:
+        return JSONResponse(status_code=502, content={"error": "tts synthesis failed"})
+    return Response(content=wav, media_type="audio/wav")
+
+
+@app.post("/api/tts/preview")
+def api_tts_preview(payload: dict):
+    if not payload or not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"error": "invalid payload"})
+    text = (payload.get("text") or "").strip()
+    if not text:
+        return JSONResponse(status_code=400, content={"error": "text required"})
+    voice = (payload.get("voice") or None)
+    base_url = _normalize_tts_base((payload.get("base_url") or None))
+    session = SessionLocal()
+    try:
+        tset = session.query(TTSSettings).filter_by(id=1).one_or_none()
+        if not (tset and tset.enabled):
+            return JSONResponse(status_code=400, content={"error": "tts not enabled"})
+        base = base_url or (tset.base_url or DEFAULT_TTS_BASE)
+        vv = voice or (tset.voice or None)
+    finally:
+        session.close()
+    client = TTSClient(base_url=base)
+    wav = client.synthesize_wav(text, voice=vv)
+    if wav is None:
+        return JSONResponse(status_code=502, content={"error": "tts synthesis failed"})
+    return Response(content=wav, media_type="audio/wav")
 
 
 # ----- Maintenance endpoints -----

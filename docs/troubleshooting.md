@@ -23,5 +23,16 @@
 
 ## Encoding / Emoji
 
-- If glyphs look odd in the UI, ensure your browser is set to UTF‑8.
+- If glyphs look odd in the UI, ensure your browser is set to UTF-8.
 
+## TTS Connectivity
+
+- Ensure TTS is enabled in Settings and that the base URL is reachable from the app container (default `http://tts:5500`).
+- Click Refresh Voices to verify connectivity; if it fails, check `docker compose logs -f tts`.
+- If exposing TTS outside Docker, set `TTS_BASE_URL` or the in-app base URL accordingly.
+
+## No Audio / Playback Issues
+
+- Browser autoplay policies may block audio until user interaction; click Play again after interacting with the page.
+- If preview works but article/weather audio fails, confirm articles have `ai_body` and a weather report exists.
+- Check the network tab for `/api/tts/...` requests; 400 indicates TTS disabled, 502 indicates the TTS server is unreachable.

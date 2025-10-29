@@ -22,3 +22,15 @@ services:
       - ./data:/data
     restart: unless-stopped
 
+  tts:
+    image: synesthesiam/opentts:latest
+    container_name: news-ai-tts
+    environment:
+      # Limit to light, local voices; Piper is CPU-friendly
+      - OPENTTS_ENGINES=piper
+    volumes:
+      - ./data/tts:/root/.local/share/opentts
+    expose:
+      - "5500"
+    restart: unless-stopped
+
