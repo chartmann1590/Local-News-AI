@@ -1,0 +1,507 @@
+from __future__ import annotations
+
+import json
+import os
+from datetime import datetime
+from typing import List, Optional
+
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
+import logging
+import time
+
+from .database import init_db, SessionLocal
+from .models import Article, WeatherReport, AppConfig, AppSettings
+from .scheduler import start_scheduler, run_harvest_once
+from . import maintenance
+import threading
+from .geo import resolve_location, set_location, auto_set_location
+from .progress import progress
+from . import scheduler as scheduler_mod
+from urllib.parse import urlparse, urlunparse
+
+
+# ----- Logging setup (container stdout) -----
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("app")
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        start = time.perf_counter()
+        path = request.url.path
+        method = request.method
+        client = request.client.host if request.client else "-"
+        response = None
+        try:
+            response = await call_next(request)
+            return response
+        except Exception:
+            logger.exception("unhandled_exception", extra={"path": path, "method": method, "client": client})
+            raise
+        finally:
+            dur_ms = int((time.perf_counter() - start) * 1000)
+            status = getattr(response, 'status_code', '-')
+            logger.info(
+                "request",
+                extra={
+                    "method": method,
+                    "path": path,
+                    "status": status,
+                    "duration_ms": dur_ms,
+                    "client": client,
+                },
+            )
+
+
+app = FastAPI(title="News-AI")
+
+BASE_DIR = os.path.dirname(__file__)
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+
+static_dir = os.path.join(BASE_DIR, "static")
+if os.path.isdir(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    # Serve Vite build assets at /assets for production bundle
+    assets_dir = os.path.join(static_dir, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+app.add_middleware(RequestLoggingMiddleware)
+
+
+def _normalize_ollama_base(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    try:
+        u = urlparse(url)
+        scheme = u.scheme or "http"
+        netloc = u.netloc or u.path  # handle bare host:port
+        path = ""
+        if not netloc:
+            return None
+        host = netloc
+        if host.startswith("localhost") or host.startswith("127.0.0.1"):
+            host = host.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
+        norm = urlunparse((scheme, host, path, "", "", ""))
+        return norm.rstrip("/")
+    except Exception:
+        return url
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
+    logger.info("startup:init_db_done")
+    # Resolve and persist location before scheduler uses it
+    try:
+        resolve_location()
+        logger.info("startup:location_resolved")
+    except Exception:
+        logger.exception("startup:location_resolution_failed")
+    start_scheduler()
+    logger.info("startup:scheduler_started")
+    # Kick off a first run on boot without blocking startup
+    def _background_first_run():
+        try:
+            run_harvest_once()
+            logger.info("startup:first_run_completed")
+        except Exception:
+            logger.exception("startup:first_run_failed")
+
+    threading.Thread(target=_background_first_run, daemon=True).start()
+
+
+@app.get("/health")
+def health():
+    return {"ok": True, "time": datetime.utcnow().isoformat()}
+
+
+@app.get("/api/status")
+def api_status():
+    snap = progress.snapshot()
+    snap["next_runs"] = scheduler_mod.next_runs()
+    return snap
+
+
+@app.post("/api/run-now")
+def run_now():
+    try:
+        logger.info("api:run_now:start")
+        run_harvest_once()
+        logger.info("api:run_now:ok")
+        return {"status": "ok"}
+    except Exception as e:
+        logger.exception("api:run_now:error")
+        return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
+
+
+def _latest_weather(session: SessionLocal) -> Optional[WeatherReport]:
+    return (
+        session.query(WeatherReport)
+        .order_by(WeatherReport.fetched_at.desc())
+        .limit(1)
+        .one_or_none()
+    )
+
+
+def _latest_articles(session: SessionLocal, limit: int = 30, offset: int = 0) -> List[Article]:
+    return (
+        session.query(Article)
+        .order_by(Article.fetched_at.desc())
+        .offset(int(offset))
+        .limit(int(limit))
+        .all()
+    )
+
+
+def _funny_author_for(article: Article) -> str:
+    try:
+        import hashlib
+        seed = (article.source_url or article.source_title or str(article.id) or "seed").encode("utf-8", errors="ignore")
+        h = int(hashlib.sha256(seed).hexdigest(), 16)
+        firsts = [
+            "Waffles", "Pickles", "Biscuit", "Snickers", "Pumpkin", "Noodle", "Sprinkles", "Muffin", "Peaches", "Tofu",
+        ]
+        lasts = [
+            "McGiggles", "Von Quill", "Fizzlebottom", "O'Snark", "Bumblebee", "Flapjack", "Wobbleton", "Sparkplug", "Featherstone", "Noodlekins",
+        ]
+        titles = ["Correspondent", "Staff Writer", "Senior Scribe", "Field Reporter", "News Enthusiast"]
+        return f"{firsts[h % len(firsts)]} {lasts[(h // 7) % len(lasts)]}, {titles[(h // 13) % len(titles)]}"
+    except Exception:
+        return "Sammy Scribbles, Staff Writer"
+
+
+@app.get("/", response_class=HTMLResponse)
+def index():
+    # Serve built React app if available; fallback to server-rendered page
+    static_index = os.path.join(static_dir, "index.html")
+    if os.path.exists(static_index):
+        logger.info("serve:index_static")
+        return FileResponse(static_index)
+    # Fallback
+    logger.warning("serve:index_fallback_html")
+    session = SessionLocal()
+    try:
+        weather = _latest_weather(session)
+        weather_json = {}
+        if weather and weather.forecast_json:
+            try:
+                weather_json = json.loads(weather.forecast_json)
+            except Exception:
+                weather_json = {}
+        articles = _latest_articles(session)
+        location = os.environ.get("LOCATION_NAME", "Local")
+        # Minimal inline fallback HTML (avoid Tailwind)
+        html = """
+        <html><head><title>Local News</title></head><body>
+        <h1>Local News</h1>
+        <p>Location: {loc}</p>
+        <h2>Weather</h2>
+        <pre style='white-space:pre-wrap'>{wr}</pre>
+        <h2>Articles</h2>
+        <ul>
+        {arts}
+        </ul>
+        </body></html>
+        """
+        arts_li = "".join(
+            f"<li><a href='{a.source_url}' target='_blank'>{a.ai_title or a.source_title}</a></li>"
+            for a in articles
+        )
+        wr_text = (weather.ai_report if weather and weather.ai_report else "Weather pending…")
+        return HTMLResponse(html.format(loc=location, wr=wr_text, arts=arts_li))
+    finally:
+        session.close()
+
+
+# (moved spa_fallback to the end of file to avoid shadowing API routes)
+
+
+@app.get("/api/articles")
+def api_articles(page: int = 1, limit: int = 10):
+    session = SessionLocal()
+    try:
+        # Clamp params
+        page = max(1, int(page or 1))
+        limit = max(1, min(100, int(limit or 10)))
+        total = session.query(Article).count()
+        pages = max(1, (total + limit - 1) // limit)
+        if page > pages:
+            page = pages
+        offset = (page - 1) * limit
+        arts = _latest_articles(session, limit=limit, offset=offset)
+        items = [
+            {
+                "id": a.id,
+                "title": a.ai_title or a.source_title,
+                "source": a.source_name,
+                "source_url": a.source_url,
+                "image_url": a.image_url,
+                "published_at": a.published_at.isoformat() if a.published_at else None,
+                "fetched_at": a.fetched_at.isoformat(),
+                "ai_model": a.ai_model,
+                "ai_body": a.ai_body,
+                "byline": _funny_author_for(a) if (a.ai_body and not (a.ai_model or "").startswith("fallback:")) else None,
+                "rewrite_note": ("Showing original text (AI unavailable)" if (a.ai_model or "").startswith("fallback:") else None),
+            }
+            for a in arts
+        ]
+        logger.info("api:articles", extra={"count": len(items), "page": page, "limit": limit, "total": total})
+        return {"items": items, "page": page, "limit": limit, "total": total, "pages": pages}
+    finally:
+        session.close()
+
+
+@app.get("/api/weather")
+def api_weather():
+    session = SessionLocal()
+    try:
+        wr = _latest_weather(session)
+        cfg = session.query(AppConfig).filter_by(id=1).one_or_none()
+        forecast = {}
+        if wr and wr.forecast_json:
+            try:
+                forecast = json.loads(wr.forecast_json)
+            except Exception:
+                forecast = {}
+        result = {
+            "location": (cfg.location_name if cfg else os.environ.get("LOCATION_NAME", "Local")),
+            "timezone": (cfg.timezone if cfg else os.environ.get("TZ", "America/New_York")),
+            "latitude": (cfg.latitude if cfg else None),
+            "longitude": (cfg.longitude if cfg else None),
+            "report": (wr.ai_report if wr else None),
+            "forecast": forecast,
+            "updated_at": (wr.fetched_at.isoformat() if wr and wr.fetched_at else None),
+        }
+        if wr and (wr.ai_model or "").startswith("fallback:"):
+            result["report_note"] = "AI report unavailable — showing raw forecast data."
+        elif not (wr and wr.ai_report):
+            result["report_note"] = "AI report pending…"
+        logger.info("api:weather", extra={"has_report": bool(result["report"])})
+        return result
+    finally:
+        session.close()
+
+
+@app.get("/api/config")
+def api_config():
+    session = SessionLocal()
+    try:
+        cfg = session.query(AppConfig).filter_by(id=1).one_or_none()
+        data = {
+            "location": (cfg.location_name if cfg else None),
+            "timezone": (cfg.timezone if cfg else os.environ.get("TZ", "America/New_York")),
+            "min_articles": int(os.environ.get("MIN_ARTICLES_PER_RUN", "10")),
+        }
+        logger.info("api:config", extra={"location": data["location"], "timezone": data["timezone"], "min_articles": data["min_articles"]})
+        return data
+    finally:
+        session.close()
+
+
+@app.post("/api/location-disabled")
+async def api_set_location(payload: dict):
+    name = (payload or {}).get("location") or (payload or {}).get("name")
+    if not name or not isinstance(name, str) or len(name.strip()) < 2:
+        return JSONResponse(status_code=400, content={"error": "location string required"})
+    cfg = set_location(name.strip())
+    # Note: scheduler timezone won’t change until restart; runs will pick new location immediately.
+    return {
+        "location": cfg.location_name,
+        "timezone": cfg.timezone,
+        "latitude": cfg.latitude,
+        "longitude": cfg.longitude,
+        "source": cfg.source,
+    }
+
+
+@app.post("/api/location")
+async def api_set_location_new(payload: dict):
+    name = (payload or {}).get("location") or (payload or {}).get("name")
+    if not name or not isinstance(name, str) or len(name.strip()) < 2:
+        return JSONResponse(status_code=400, content={"error": "location string required"})
+    cfg = set_location(name.strip())
+    def _bg_refresh():
+        try:
+            session = SessionLocal()
+            try:
+                aset = session.query(AppSettings).filter_by(id=1).one_or_none()
+                base_url = aset.ollama_base_url if aset and aset.ollama_base_url else None
+                model = aset.ollama_model if aset and aset.ollama_model else None
+                temp_unit = aset.temp_unit if aset and aset.temp_unit else None
+            finally:
+                session.close()
+            scheduler_mod.progress.phase('weather_fetch', 'Updating due to location change')
+            scheduler_mod._gen_weather_report(cfg.location_name, base_url=base_url, model=model, temp_unit=temp_unit)
+        except Exception:
+            logger.exception("location_change_refresh_failed")
+    threading.Thread(target=_bg_refresh, daemon=True).start()
+    return {
+        "location": cfg.location_name,
+        "timezone": cfg.timezone,
+        "latitude": cfg.latitude,
+        "longitude": cfg.longitude,
+        "source": cfg.source,
+    }
+
+@app.post("/api/location/auto")
+def api_auto_location():
+    cfg = auto_set_location()
+    def _bg_refresh():
+        try:
+            session = SessionLocal()
+            try:
+                aset = session.query(AppSettings).filter_by(id=1).one_or_none()
+                base_url = aset.ollama_base_url if aset and aset.ollama_base_url else None
+                model = aset.ollama_model if aset and aset.ollama_model else None
+                temp_unit = aset.temp_unit if aset and aset.temp_unit else None
+            finally:
+                session.close()
+            scheduler_mod.progress.phase('weather_fetch', 'Updating due to auto location')
+            scheduler_mod._gen_weather_report(cfg.location_name, base_url=base_url, model=model, temp_unit=temp_unit)
+        except Exception:
+            logger.exception("auto_location_refresh_failed")
+    threading.Thread(target=_bg_refresh, daemon=True).start()
+    return {"ok": True}
+
+@app.get("/api/settings")
+def api_get_settings():
+    session = SessionLocal()
+    try:
+        s = session.query(AppSettings).filter_by(id=1).one_or_none()
+        return {
+            "ollama_base_url": s.ollama_base_url if s else None,
+            "ollama_model": s.ollama_model if s else None,
+            "temp_unit": s.temp_unit if s else "F",
+        }
+    finally:
+        session.close()
+
+@app.post("/api/settings")
+def api_set_settings(payload: dict):
+    session = SessionLocal()
+    try:
+        s = session.query(AppSettings).filter_by(id=1).one_or_none()
+        if not s:
+            s = AppSettings(id=1)
+        changed_unit = False
+        if payload is None:
+            payload = {}
+        if "ollama_base_url" in payload:
+            s.ollama_base_url = _normalize_ollama_base((payload.get("ollama_base_url") or None))
+        if "ollama_model" in payload:
+            s.ollama_model = (payload.get("ollama_model") or None)
+        if "temp_unit" in payload:
+            new_unit = (payload.get("temp_unit") or "").upper()[:1] or None
+            changed_unit = (new_unit != s.temp_unit)
+            s.temp_unit = new_unit
+        s.updated_at = datetime.utcnow()
+        session.merge(s)
+        session.commit()
+    finally:
+        session.close()
+    if changed_unit:
+        def _bg_refresh_unit():
+            try:
+                cfg_session = SessionLocal()
+                try:
+                    cfg = cfg_session.query(AppConfig).filter_by(id=1).one_or_none()
+                    aset = cfg_session.query(AppSettings).filter_by(id=1).one_or_none()
+                    base_url = aset.ollama_base_url if aset and aset.ollama_base_url else None
+                    model = aset.ollama_model if aset and aset.ollama_model else None
+                    temp_unit = aset.temp_unit if aset and aset.temp_unit else None
+                finally:
+                    cfg_session.close()
+                loc = cfg.location_name if cfg else os.environ.get("LOCATION_NAME", "Local")
+                scheduler_mod.progress.phase('weather_fetch', 'Updating due to unit change')
+                scheduler_mod._gen_weather_report(loc, base_url=base_url, model=model, temp_unit=temp_unit)
+            except Exception:
+                logger.exception("unit_change_refresh_failed")
+        threading.Thread(target=_bg_refresh_unit, daemon=True).start()
+    return {"status": "ok"}
+
+@app.post("/api/weather/refresh")
+def api_refresh_weather():
+    cfg = resolve_location()
+    def _bg():
+        try:
+            session = SessionLocal()
+            try:
+                aset = session.query(AppSettings).filter_by(id=1).one_or_none()
+                base_url = aset.ollama_base_url if aset and aset.ollama_base_url else None
+                model = aset.ollama_model if aset and aset.ollama_model else None
+                temp_unit = aset.temp_unit if aset and aset.temp_unit else None
+            finally:
+                session.close()
+            scheduler_mod.progress.phase('weather_fetch', 'Manual refresh')
+            scheduler_mod._gen_weather_report(cfg.location_name, base_url=base_url, model=model, temp_unit=temp_unit)
+        except Exception:
+            logger.exception("weather_manual_refresh_failed")
+    threading.Thread(target=_bg, daemon=True).start()
+    return {"status": "queued"}
+
+@app.post("/api/ollama/test")
+def api_ollama_test(payload: dict):
+    base_url = _normalize_ollama_base((payload or {}).get("base_url") or None)
+    try:
+        from .ai import ollama_list_models
+        models = ollama_list_models(base_url=base_url)
+        if models is None:
+            return JSONResponse(status_code=502, content={"ok": False, "error": "cannot reach ollama"})
+        return {"ok": True, "models": models}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+@app.get("/api/ollama/models")
+def api_ollama_models(base_url: Optional[str] = None):
+    try:
+        from .ai import ollama_list_models
+        models = ollama_list_models(base_url=_normalize_ollama_base(base_url))
+        if models is None:
+            return JSONResponse(status_code=502, content={"error": "cannot reach ollama"})
+        return {"models": models}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ----- Maintenance endpoints -----
+
+@app.post("/api/maintenance/dedup")
+def api_maintenance_dedup():
+    try:
+        res = maintenance.purge_duplicate_articles()
+        return {"status": "ok", **res}
+    except Exception as e:
+        logger.exception("maintenance_dedup_failed")
+        return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
+
+
+@app.post("/api/maintenance/rewrite-missing")
+def api_maintenance_rewrite_missing(limit: int | None = None):
+    # Run in a background thread to avoid blocking HTTP
+    def _bg():
+        try:
+            maintenance.rewrite_missing_articles(limit=limit)
+        except Exception:
+            logger.exception("maintenance_rewrite_missing_failed")
+    threading.Thread(target=_bg, daemon=True).start()
+    return {"status": "queued"}
+
+# SPA fallback for client-side routes (avoids 404/blank on refresh)
+@app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)
+def spa_fallback(full_path: str):
+    # Do not shadow API routes
+    if full_path.startswith("api/") or full_path == "health":
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
+    static_index = os.path.join(static_dir, "index.html")
+    if os.path.exists(static_index):
+        logger.info("serve:spa_fallback", extra={"path": full_path})
+        return FileResponse(static_index)
+    return HTMLResponse("<html><body><h1>App not built</h1></body></html>", status_code=200)

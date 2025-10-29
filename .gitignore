@@ -1,0 +1,15 @@
+# Local environment
+.venv/
+__pycache__/
+*.pyc
+
+# Build artifacts
+web/node_modules/
+web/dist/
+
+# Data volume (managed externally)
+data/
+
+# Temp files
+tmp_*.txt
+
