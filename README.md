@@ -1,45 +1,50 @@
 Local News & Weather (Dockerized)
+================================
 
-Fast, configurable local news + weather with on‑device AI rewrites via Ollama.
+Fast local news + weather with on‑device AI rewrites (Ollama). Clean UI. Zero external paid APIs.
 
-Highlights
-- Auto‑detects location (with manual override in Settings).
-- Schedules three harvests per day (configurable) and rewrites news with Ollama.
-- Weather report with forecast icons and an embedded radar.
-- Smart deduplication cleans up lookalike stories automatically after each run.
-- Clean UI with pagination (10 per page), live progress, and one‑at‑a‑time rewrites.
+Features
+- Automatic location detection with manual override in Settings
+- 3×/day scheduled harvesting (configurable) with Ollama article rewrites
+- Weather report with daily icons and an embedded radar
+- Smart deduplication (by normalized title and image) after each run
+- Pagination (10/page), live progress, “Now rewriting” details, single‑threaded rewrites
 
 Quick Start
 1) Requirements
    - Docker and Docker Compose
-   - Ollama running on the host (`http://localhost:11434`) with an available model (e.g., `llama3.2`)
+   - Ollama on the host (`http://localhost:11434`) with a model available (e.g., `llama3.2`)
 
-2) Optional config — edit env vars in `docker-compose.yml`
-   - `LOCATION_NAME` — force a specific city/state; leave unset for auto‑detect
-   - `MIN_ARTICLES_PER_RUN` — default `10`
-   - `TZ` — fallback timezone (location detection provides the real TZ)
-   - `SCHEDULE_MORNING`, `SCHEDULE_NOON`, `SCHEDULE_EVENING` — `HH:MM` in local TZ
-   - `OLLAMA_BASE_URL` — default `http://host.docker.internal:11434`
+2) Run
+   - Build + start: `docker compose up --build -d`
+   - App: http://localhost:18080
 
-3) Run
-   - `docker compose up --build -d`
-   - Open http://localhost:18080
+3) Configure (optional)
+   - Edit env vars in `docker-compose.yml` (see docs below)
+   - Or use the in‑app Settings for Ollama URL/model, units (°F/°C), and location
 
-Usage
-- Click Run Now in the header for a manual harvest.
-- Use Settings to configure Ollama URL/model, units (°F/°C), location, and maintenance tasks (dedup / rewrite missing).
-- Weather (left) shows the AI report, 5‑day icons, and radar; News (right) shows the latest articles with pagination.
+Using the App
+- Header → Run Now to trigger an immediate harvest
+- Weather (left): AI report, 5‑day icons, radar
+- News (right): latest local articles with rewrites, bylines, and pagination
+- Settings: Ollama settings, units, location, Maintenance (Deduplicate / Rewrite Missing)
 
-Docs
-- Full docs: `docs/README.md`
-- API reference: `docs/api.md`
+Documentation
+- Overview & Setup: docs/README.md
+- Configuration: docs/configuration.md
+- Setup & Run: docs/setup.md
+- Maintenance & Data: docs/maintenance.md
+- Customization: docs/customization.md
+- Architecture: docs/architecture.md
+- Deployment tips: docs/deployment.md
+- Troubleshooting: docs/troubleshooting.md
+- API Reference: docs/api.md
 
 Notes
-- Data is stored in `./data/app.db` (SQLite) and volume‑mounted by Compose.
-- The app schedules jobs internally with APScheduler.
-- From Linux containers, `host.docker.internal` may resolve correctly; otherwise set `OLLAMA_BASE_URL` to your host IP (e.g., `http://172.17.0.1:11434`).
+- SQLite DB at `./data/app.db` (mounted volume in Compose)
+- APScheduler handles internal schedules
+- On Linux, if `host.docker.internal` is unavailable, set `OLLAMA_BASE_URL` to your host IP (e.g., `http://172.17.0.1:11434`)
 
-Security/Usage
-- Sources are free RSS/HTML; no paid APIs included.
-- Rewrites preserve facts/attribution. Always verify at the source link.
-
+Security
+- Sources are free RSS/HTML only; no paid APIs included
+- AI rewrites preserve attribution — verify facts at the source link
