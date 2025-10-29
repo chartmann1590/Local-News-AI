@@ -24,8 +24,6 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
         return None
 
     text = content.strip()
-    if len(text) > 12000:
-        text = text[:12000]
 
     system_prompt = (
         "You are a careful local news editor. Rewrite the article below for a local news site. "
@@ -137,8 +135,6 @@ def generate_article_comment(
     if not user_message or not article_body:
         return None
     text = article_body.strip()
-    if len(text) > 12000:
-        text = text[:12000]
 
     convo = ""
     if history and isinstance(history, list):

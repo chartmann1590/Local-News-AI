@@ -39,6 +39,8 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY app /app/app
 # Copy built React app into static directory
 COPY --from=webbuild /web/dist /app/app/static
+# Copy APK file if it exists (preserve it after web build)
+COPY app/static/news-ai-app.apk /app/app/static/news-ai-app.apk
 
 # SQLite data path
 RUN mkdir -p /data

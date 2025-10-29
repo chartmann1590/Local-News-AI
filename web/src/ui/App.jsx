@@ -217,6 +217,11 @@ function Header({ location, onRunNow, running, onOpenSettings }) {
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <ThemeToggle />
+            <a href="/static/news-ai-app.apk" download="news-ai-app.apk" className="px-3 md:px-4 py-2 rounded-md bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white transition-all shadow-md hover:shadow-lg flex items-center gap-2">
+              <span>📱</span>
+              <span className="hidden sm:inline">Download App</span>
+              <span className="sm:hidden">App</span>
+            </a>
             <button disabled={running} onClick={onRunNow} className={`px-3 md:px-4 py-2 rounded-md ${running ? 'bg-slate-400' : 'bg-blue-600 hover:bg-blue-700'} text-white transition-colors`}>
               {running ? 'Running…' : 'Run Now'}
             </button>

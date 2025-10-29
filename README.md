@@ -12,6 +12,7 @@ Features
 - Optional offline Text-to-Speech (Piper via OpenTTS) for articles and weather
 - Per-article AI comments: click Comments under any article to chat with the AI using the article’s content; replies use the article’s generated author name
 - Light/Dark theme toggle with persistent preference
+- Android Mobile App: Native Flutter app with full feature parity (see Mobile App section below)
 
 Quick Start
 1) Requirements
@@ -37,8 +38,16 @@ Using the App
 - Settings: Ollama settings, units, location, Maintenance (Deduplicate / Rewrite Missing)
   - Text-to-Speech: enable, set base URL (default `http://tts:5500`), choose a voice, and preview
 
+Mobile App
+- Native Android app built with Flutter
+- Full feature parity with web interface
+- Available as pre-built APK in `app/static/news-ai-app.apk`
+- Download from web interface at `http://your-server:port/static/news-ai-app.apk`
+- See `docs/mobile-app.md` for complete documentation, setup, and usage guide
+
 Documentation
 - Overview & Setup: docs/README.md
+- Mobile App: docs/mobile-app.md
 - Configuration: docs/configuration.md
 - Setup & Run: docs/setup.md
 - Maintenance & Data: docs/maintenance.md

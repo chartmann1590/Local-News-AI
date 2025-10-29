@@ -13,3 +13,5 @@ data/
 # Temp files
 tmp_*.txt
 
+# Documentation
+claude.md
