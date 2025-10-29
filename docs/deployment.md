@@ -39,3 +39,9 @@ For auto-start on boot, use your host’s service manager (e.g., a systemd unit 
 - A simple service worker provides offline caching. If clients don’t see new styles immediately, they may be using cached assets.
   - Ask users to hard refresh.
   - If needed, bump the cache name in `web/public/sw.js` (e.g., update `CACHE_NAME`) and rebuild.
+  - PWAs may delay updates until all tabs are closed; a hard refresh or closing/reopening the app ensures the new SW takes control.
+
+## Mobile PWA behavior
+
+- Android/Chrome: a system install prompt appears when eligible. The in-app Settings → Install App button can also trigger install.
+- iOS Safari: use Share → Add to Home Screen (there’s no `beforeinstallprompt` event on iOS).

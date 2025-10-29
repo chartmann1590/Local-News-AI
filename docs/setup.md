@@ -20,6 +20,12 @@ Open the app: http://localhost:18080
 - Set your units (°F/°C) and location (or use Auto-detect).
 - Click Run Now to start a harvest.
 
+## Install as an App (PWA)
+
+- On Android/Chrome or desktop Chromium/Edge: open Settings → Install App, or use your browser menu → Install/Add to Home Screen.
+- On iOS Safari: tap Share → Add to Home Screen (Apple doesn’t show the same install prompt).
+- Once installed, the app runs fullscreen and caches assets for offline access.
+
 ### Optional: Enable Text-to-Speech (TTS)
 
 - The provided Docker Compose includes an OpenTTS (Piper) service the app can use.

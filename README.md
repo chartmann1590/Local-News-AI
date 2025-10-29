@@ -30,6 +30,7 @@ Quick Start
 Using the App
 - Header → Run Now to trigger an immediate harvest
 - Header → Theme button toggles between light and dark modes
+- Settings → Install App lets you install the PWA on supported browsers (Android/Chrome and desktop). On iOS Safari, use Share → Add to Home Screen.
 - Weather (left): AI report, 5-day icons, radar
 - News (right): latest local articles with rewrites, bylines, and pagination
 - Article Chat: expand Comments on any article to ask questions about it; the AI replies using only that article’s details

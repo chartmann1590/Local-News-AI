@@ -25,16 +25,20 @@ function PwaInstallPrompt() {
   useEffect(() => {
     const dismissed = localStorage.getItem('pwa-install-dismissed')
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone
-    if (isStandalone) return
     function onBeforeInstall(e) {
       e.preventDefault()
-      if (dismissed) return // user dismissed recently
+      // Save globally so Settings panel can trigger install as well
+      window.__pwaInstallDeferred = e
+      window.dispatchEvent(new CustomEvent('pwa-can-install'))
+      if (dismissed || isStandalone) return
       setDeferred(e)
       setVisible(true)
     }
     function onInstalled() {
       setVisible(false)
       setDeferred(null)
+      window.__pwaInstallDeferred = null
+      window.dispatchEvent(new CustomEvent('pwa-installed'))
     }
     window.addEventListener('beforeinstallprompt', onBeforeInstall)
     window.addEventListener('appinstalled', onInstalled)
@@ -46,13 +50,15 @@ function PwaInstallPrompt() {
 
   if (!visible) return null
 
-  function install() {
-    if (!deferred) return
-    deferred.prompt()
-    deferred.userChoice.finally(() => {
+  async function install() {
+    const promptEvt = deferred || window.__pwaInstallDeferred
+    if (!promptEvt) return
+    promptEvt.prompt()
+    try { await promptEvt.userChoice } finally {
       setVisible(false)
       setDeferred(null)
-    })
+      window.__pwaInstallDeferred = null
+    }
   }
   function dismiss() {
     try { localStorage.setItem('pwa-install-dismissed', String(Date.now())) } catch (_) {}
@@ -679,6 +685,9 @@ function SettingsPanel({ onClose, reloadAll }) {
   const [mBusy, setMBusy] = useState(false)
   const [mMsg, setMMsg] = useState('')
   const [mLimit, setMLimit] = useState('0')
+  // PWA state
+  const [pwaCanInstall, setPwaCanInstall] = useState(false)
+  const [pwaInstalled, setPwaInstalled] = useState(false)
 
   useEffect(() => {
     ;(async () => {
@@ -707,6 +716,31 @@ function SettingsPanel({ onClose, reloadAll }) {
       }
     })()
   }, [])
+
+  // PWA hooks
+  useEffect(() => {
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone
+    setPwaInstalled(!!isStandalone)
+    const onCanInstall = () => setPwaCanInstall(true)
+    const onInstalled = () => setPwaInstalled(true)
+    window.addEventListener('pwa-can-install', onCanInstall)
+    window.addEventListener('appinstalled', onInstalled)
+    window.addEventListener('pwa-installed', onInstalled)
+    return () => {
+      window.removeEventListener('pwa-can-install', onCanInstall)
+      window.removeEventListener('appinstalled', onInstalled)
+      window.removeEventListener('pwa-installed', onInstalled)
+    }
+  }, [])
+
+  async function installPwa() {
+    const promptEvt = window.__pwaInstallDeferred
+    if (!promptEvt) return
+    promptEvt.prompt()
+    try { await promptEvt.userChoice } finally {
+      // no-op; appinstalled event will update state if accepted
+    }
+  }
 
   async function testOllama() {
     setTesting(true)
@@ -883,6 +917,29 @@ function SettingsPanel({ onClose, reloadAll }) {
               <div className="mt-2">
                 <AudioPlayer src={previewUrl} />
               </div>
+            )}
+          </section>
+
+          <section>
+            <div className="font-medium mb-2">Install App</div>
+            {!pwaInstalled ? (
+              <div className="rounded-lg border border-slate-200/60 dark:border-slate-700/60 bg-white dark:bg-slate-800 p-3 text-sm flex items-center gap-3 flex-wrap">
+                <button
+                  onClick={installPwa}
+                  disabled={!pwaCanInstall}
+                  className={`px-3 py-1.5 rounded-md ${pwaCanInstall ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'}`}
+                  title={pwaCanInstall ? 'Install this app' : 'Use your browser menu to add to home screen'}
+                >
+                  {pwaCanInstall ? 'Install' : 'Install via Browser Menu'}
+                </button>
+                {!pwaCanInstall && (
+                  <span className="text-slate-500">
+                    On iPhone/iPad: Share → Add to Home Screen
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div className="text-sm text-emerald-600 dark:text-emerald-400">App is installed on this device.</div>
             )}
           </section>
 
