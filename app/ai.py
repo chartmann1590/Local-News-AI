@@ -36,7 +36,7 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
         f"Location: {location}\n"
         f"Original Title: {source_title or 'N/A'}\n\n"
         "Article Content to Rewrite:\n" + text + "\n\n"
-        "Output strict JSON with keys: title (string), body (string)."
+        "Output strict JSON with keys: title (string), body (string), author (string)."
     )
 
     payload = {
@@ -52,10 +52,18 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
         # Ollama returns {'response': '...json...'} when format=json
         response = data.get("response")
         if isinstance(response, dict):
-            return {"title": response.get("title", ""), "body": response.get("body", "")}
+            return {
+                "title": response.get("title", ""),
+                "body": response.get("body", ""),
+                "author": response.get("author", ""),
+            }
         elif isinstance(response, str):
             obj = json.loads(response)
-            return {"title": obj.get("title", ""), "body": obj.get("body", "")}
+            return {
+                "title": obj.get("title", ""),
+                "body": obj.get("body", ""),
+                "author": obj.get("author", ""),
+            }
     except Exception:
         return None
     return None
@@ -109,3 +117,70 @@ def ollama_list_models(base_url: Optional[str] = None) -> Optional[list[str]]:
         return models
     except Exception:
         return None
+
+
+def generate_article_comment(
+    *,
+    article_title: str | None,
+    article_body: str,
+    user_message: str,
+    author_name: str,
+    location: str | None = None,
+    base_url: Optional[str] = None,
+    model: Optional[str] = None,
+    history: Optional[list[dict[str, str]]] = None,
+    timeout_s: int = 600,
+) -> Optional[str]:
+    """Generate a short AI reply to a user's comment about an article.
+    The AI should respond in the voice of the provided author_name and only use article details.
+    """
+    if not user_message or not article_body:
+        return None
+    text = article_body.strip()
+    if len(text) > 12000:
+        text = text[:12000]
+
+    convo = ""
+    if history and isinstance(history, list):
+        # Include a brief conversation recap
+        pairs = []
+        for msg in history[-6:]:  # keep it short
+            role = (msg.get("role") or "").lower()
+            content = (msg.get("content") or "").strip()
+            if not content:
+                continue
+            if role in ("user", "human"):
+                pairs.append(f"User: {content}")
+            else:
+                pairs.append(f"{author_name}: {content}")
+        if pairs:
+            convo = "\nConversation so far:\n" + "\n".join(pairs)
+
+    system_prompt = (
+        "You are an AI news author responding in the comments section. "
+        "Answer as '" + author_name + "'. Use only facts from the article text. "
+        "If the user asks for info not in the article, say you don't have that detail. "
+        "Be concise (2-4 sentences), specific, and non-speculative."
+    )
+    user_prompt = (
+        (f"Location: {location}\n" if location else "") +
+        (f"Article Title: {article_title or ''}\n\n" if article_title else "") +
+        "Article Text (for context):\n" + text + "\n\n" +
+        (convo + "\n\n" if convo else "") +
+        "User says: " + user_message.strip()
+    )
+
+    payload = {
+        "model": (model or DEFAULT_OLLAMA_MODEL),
+        "prompt": f"<SYSTEM>{system_prompt}</SYSTEM>\n<USER>{user_prompt}</USER>",
+        "stream": False,
+        "options": {"temperature": 0.2},
+    }
+    try:
+        data = _post_ollama("/api/generate", payload, base_url=base_url, timeout_s=timeout_s)
+        response = data.get("response")
+        if isinstance(response, str):
+            return response.strip()
+    except Exception:
+        return None
+    return None

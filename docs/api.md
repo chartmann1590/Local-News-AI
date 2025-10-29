@@ -18,6 +18,10 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
   - Response: `{ items, page, limit, total, pages }` where each item includes:
     - `id`, `title`, `source`, `source_url`, `image_url`, `published_at`, `fetched_at`, `ai_model`, `ai_body`, `rewrite_note`, `byline` (present for non-fallback AI articles).
 
+- POST `/api/articles/{id}/chat`
+  - Body: `{ message: string, history?: [{ role: 'user'|'assistant', content: string }, ...] }`.
+  - Returns `{ author: string, reply: string }` — the AI reply uses the article’s generated author name.
+
 ## Harvest & Jobs
 
 - POST `/api/run-now`

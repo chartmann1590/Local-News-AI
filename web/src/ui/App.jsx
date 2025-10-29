@@ -2,6 +2,70 @@ import React, { useEffect, useState, useMemo } from 'react'
 import AudioPlayer from './AudioPlayer.jsx'
 import { SkeletonCard } from './Skeleton.jsx'
 
+function ArticleChat({ articleId, initialAuthor }) {
+  const [messages, setMessages] = useState([])
+  const [author, setAuthor] = useState(initialAuthor || 'Local Desk')
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  async function send() {
+    const msg = text.trim()
+    if (!msg || busy) return
+    setText('')
+    setErr('')
+    const history = messages.map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }))
+    const next = [...messages, { role: 'user', content: msg }]
+    setMessages(next)
+    setBusy(true)
+    try {
+      const res = await fetch(`/api/articles/${articleId}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, history }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      setAuthor(data?.author || author)
+      const reply = (data?.reply || '').trim()
+      setMessages(m => [...m, { role: 'ai', content: reply || '(no reply)' }])
+    } catch (e) {
+      setErr('Failed to send message')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function onKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      send()
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-slate-200/60 dark:border-slate-700/60 bg-white dark:bg-slate-900/40">
+      <div className="px-3 py-2 border-b border-slate-200/60 dark:border-slate-700/60 text-sm text-slate-600 dark:text-slate-300">Discuss with {author}</div>
+      <div className="p-3 space-y-2 max-h-64 overflow-auto">
+        {messages.length === 0 && (
+          <div className="text-sm text-slate-500">Start the conversation — ask a question about this article.</div>
+        )}
+        {messages.map((m, i) => (
+          <div key={i} className={`text-sm ${m.role === 'user' ? 'text-slate-900 dark:text-slate-100' : 'text-slate-800 dark:text-slate-200'}`}>
+            <span className="font-medium mr-2">{m.role === 'user' ? 'You' : author}:</span>
+            <span className="whitespace-pre-wrap">{m.content}</span>
+          </div>
+        ))}
+      </div>
+      <div className="p-3 border-t border-slate-200/60 dark:border-slate-700/60 flex items-start gap-2">
+        <textarea value={text} onChange={e=>setText(e.target.value)} onKeyDown={onKey} rows={2} placeholder="Write a comment or question" className="flex-1 px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800" />
+        <button onClick={send} disabled={busy || !text.trim()} className={`px-3 py-2 rounded-md ${busy || !text.trim() ? 'bg-slate-400' : 'bg-blue-600 hover:bg-blue-700'} text-white`}>{busy ? 'Sending…' : 'Send'}</button>
+      </div>
+      {err && <div className="px-3 pb-2 text-xs text-red-500">{err}</div>}
+    </div>
+  )
+}
+
 function Header({ location, onRunNow, running, onOpenSettings }) {
   return (
     <header>
@@ -103,6 +167,7 @@ function ArticleCard({ a, tts }) {
   const preview = useMemo(() => (a.preview || (a.ai_body || '')).slice(0, 500), [a])
   const hasMore = (a.ai_body || '').length > preview.length
   const [open, setOpen] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
   return (
     <article className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200/60 dark:border-slate-700/60 overflow-hidden">
       {a.image_url && <img src={a.image_url} alt="" className="w-full h-44 object-cover"/>}
@@ -134,6 +199,18 @@ function ArticleCard({ a, tts }) {
         {tts?.enabled && a?.ai_body && (
           <div className="mt-3">
             <AudioPlayer fetchUrl={`/api/tts/article/${a.id}?${tts?.voice ? ('voice='+encodeURIComponent(tts.voice)+'&') : ''}ts=${encodeURIComponent(a.fetched_at||'')}`} />
+          </div>
+        )}
+        {a?.ai_body && (
+          <div className="mt-3">
+            <button onClick={() => setChatOpen(v=>!v)} className="px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50">
+              {chatOpen ? 'Hide Comments' : 'Comments'}
+            </button>
+          </div>
+        )}
+        {chatOpen && (
+          <div className="mt-3">
+            <ArticleChat articleId={a.id} initialAuthor={a.byline || 'Local Desk'} />
           </div>
         )}
       </div>

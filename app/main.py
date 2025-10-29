@@ -23,6 +23,7 @@ from .progress import progress
 from . import scheduler as scheduler_mod
 from urllib.parse import urlparse, urlunparse
 from .tts import TTSClient, DEFAULT_TTS_BASE
+from .ai import generate_article_comment
 
 
 # ----- Logging setup (container stdout) -----
@@ -276,6 +277,47 @@ def api_articles(page: int = 1, limit: int = 10):
         return {"items": items, "page": page, "limit": limit, "total": total, "pages": pages}
     finally:
         session.close()
+
+
+@app.post("/api/articles/{article_id}/chat")
+def api_article_chat(article_id: int, payload: dict):
+    if not payload or not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"error": "invalid payload"})
+    message = (payload.get("message") or "").strip()
+    if not message:
+        return JSONResponse(status_code=400, content={"error": "message required"})
+    history = payload.get("history") if isinstance(payload.get("history"), list) else None
+
+    session = SessionLocal()
+    try:
+        a = session.query(Article).filter_by(id=article_id).one_or_none()
+        if not a or not a.ai_body:
+            return JSONResponse(status_code=404, content={"error": "article not found or empty"})
+        # Build author name similar to list API
+        author_name = _funny_author_for(a) if (a.ai_body and not (a.ai_model or "").startswith("fallback:")) else "Local Desk"
+        # Load AI settings
+        aset = session.query(AppSettings).filter_by(id=1).one_or_none()
+        base_url = aset.ollama_base_url if aset and aset.ollama_base_url else os.environ.get("OLLAMA_BASE_URL")
+        model = aset.ollama_model if aset and aset.ollama_model else os.environ.get("OLLAMA_MODEL")
+        cfg = session.query(AppConfig).filter_by(id=1).one_or_none()
+        location = cfg.location_name if cfg else os.environ.get("LOCATION_NAME", "Local")
+    finally:
+        session.close()
+
+    reply = generate_article_comment(
+        article_title=a.ai_title or a.source_title,
+        article_body=a.ai_body,
+        user_message=message,
+        author_name=author_name,
+        location=location,
+        base_url=base_url,
+        model=model,
+        history=history,
+        timeout_s=600,
+    )
+    if not reply:
+        return JSONResponse(status_code=502, content={"error": "ai_unavailable"})
+    return {"author": author_name, "reply": reply}
 
 
 @app.get("/api/weather")
