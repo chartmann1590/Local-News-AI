@@ -25,6 +25,13 @@
 
 - If glyphs look odd in the UI, ensure your browser is set to UTF-8.
 
+## Chat / Comments
+
+- 429 Too Many Requests: you hit the per-IP per-article limit. Increase `CHAT_RATE_LIMIT_PER_MIN` or wait a minute.
+- 502 ai_unavailable: the model call failed. Verify Ollama is reachable (Settings → Ollama → Test) and check app logs.
+- Messages not saving: ensure the SQLite file is writable and `chat_messages` table exists (created automatically at startup).
+- Clearing threads: use the Clear button in the UI, or call `DELETE /api/articles/{id}/chat`.
+
 ## TTS Connectivity
 
 - Ensure TTS is enabled in Settings and that the base URL is reachable from the app container (default `http://tts:5500`).

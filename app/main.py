@@ -14,7 +14,7 @@ import logging
 import time
 
 from .database import init_db, SessionLocal
-from .models import Article, WeatherReport, AppConfig, AppSettings, TTSSettings
+from .models import Article, WeatherReport, AppConfig, AppSettings, TTSSettings, ChatMessage
 from .scheduler import start_scheduler, run_harvest_once
 from . import maintenance
 import threading
@@ -24,6 +24,7 @@ from . import scheduler as scheduler_mod
 from urllib.parse import urlparse, urlunparse
 from .tts import TTSClient, DEFAULT_TTS_BASE
 from .ai import generate_article_comment
+from collections import defaultdict, deque
 
 
 # ----- Logging setup (container stdout) -----
@@ -114,6 +115,27 @@ def _normalize_tts_base(url: Optional[str]) -> Optional[str]:
         return norm.rstrip("/")
     except Exception:
         return url
+
+# ----- Simple in-memory rate limit for article chat -----
+_CHAT_RL_LOCK = threading.Lock()
+_CHAT_RL: dict[str, deque] = defaultdict(deque)  # key: f"{ip}:{article_id}"
+_CHAT_RL_MAX = int(os.getenv("CHAT_RATE_LIMIT_PER_MIN", "10"))
+
+def _rate_limited(ip: str, article_id: int) -> bool:
+    try:
+        now = time.time()
+        key = f"{ip}:{article_id}"
+        with _CHAT_RL_LOCK:
+            q = _CHAT_RL[key]
+            # drop entries older than 60s
+            while q and (now - q[0]) > 60.0:
+                q.popleft()
+            if len(q) >= _CHAT_RL_MAX:
+                return True
+            q.append(now)
+    except Exception:
+        return False
+    return False
 
 @app.on_event("startup")
 def on_startup():
@@ -279,13 +301,50 @@ def api_articles(page: int = 1, limit: int = 10):
         session.close()
 
 
+@app.get("/api/articles/{article_id}/chat")
+def api_article_chat_get(article_id: int):
+    session = SessionLocal()
+    try:
+        a = session.query(Article).filter_by(id=article_id).one_or_none()
+        if not a:
+            return JSONResponse(status_code=404, content={"error": "article not found"})
+        author_name = _funny_author_for(a) if (a.ai_body and not (a.ai_model or "").startswith("fallback:")) else "Local Desk"
+        msgs = (
+            session.query(ChatMessage)
+            .filter_by(article_id=article_id)
+            .order_by(ChatMessage.created_at.asc())
+            .all()
+        )
+        items = [
+            {"role": m.role, "content": m.content, "created_at": (m.created_at.isoformat() if m.created_at else None)}
+            for m in msgs
+        ]
+        return {"author": author_name, "messages": items}
+    finally:
+        session.close()
+
+
+@app.delete("/api/articles/{article_id}/chat")
+def api_article_chat_clear(article_id: int):
+    session = SessionLocal()
+    try:
+        session.query(ChatMessage).filter_by(article_id=article_id).delete()
+        session.commit()
+        return {"status": "cleared"}
+    finally:
+        session.close()
+
+
 @app.post("/api/articles/{article_id}/chat")
-def api_article_chat(article_id: int, payload: dict):
+def api_article_chat(article_id: int, payload: dict, request: Request):
     if not payload or not isinstance(payload, dict):
         return JSONResponse(status_code=400, content={"error": "invalid payload"})
     message = (payload.get("message") or "").strip()
     if not message:
         return JSONResponse(status_code=400, content={"error": "message required"})
+    # Basic size guard
+    if len(message) > 2000:
+        message = message[:2000]
     history = payload.get("history") if isinstance(payload.get("history"), list) else None
 
     session = SessionLocal()
@@ -301,8 +360,36 @@ def api_article_chat(article_id: int, payload: dict):
         model = aset.ollama_model if aset and aset.ollama_model else os.environ.get("OLLAMA_MODEL")
         cfg = session.query(AppConfig).filter_by(id=1).one_or_none()
         location = cfg.location_name if cfg else os.environ.get("LOCATION_NAME", "Local")
+        # Persist user's message
+        um = ChatMessage(article_id=article_id, role="user", content=message)
+        session.add(um)
+        session.commit()
     finally:
         session.close()
+
+    # Rate limit per IP + article
+    ip = request.client.host if request.client else "-"
+    if _rate_limited(ip, article_id):
+        return JSONResponse(status_code=429, content={"error": "rate_limited"})
+
+    # Include recent persisted history (plus provided) capped to 6 turns
+    session = SessionLocal()
+    try:
+        msgs = (
+            session.query(ChatMessage)
+            .filter_by(article_id=article_id)
+            .order_by(ChatMessage.created_at.asc())
+            .all()
+        )
+        persisted = [{"role": m.role, "content": m.content} for m in msgs[-6:]]
+    finally:
+        session.close()
+    merged_history = []
+    if persisted:
+        merged_history.extend(persisted)
+    if history:
+        # Append only the last few client-side messages
+        merged_history.extend(history[-6:])
 
     reply = generate_article_comment(
         article_title=a.ai_title or a.source_title,
@@ -312,11 +399,19 @@ def api_article_chat(article_id: int, payload: dict):
         location=location,
         base_url=base_url,
         model=model,
-        history=history,
+        history=merged_history,
         timeout_s=600,
     )
     if not reply:
         return JSONResponse(status_code=502, content={"error": "ai_unavailable"})
+    # Persist AI reply
+    session = SessionLocal()
+    try:
+        am = ChatMessage(article_id=article_id, role="ai", content=reply)
+        session.add(am)
+        session.commit()
+    finally:
+        session.close()
     return {"author": author_name, "reply": reply}
 
 

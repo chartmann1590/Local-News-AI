@@ -9,6 +9,26 @@ function ArticleChat({ articleId, initialAuthor }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
+  useEffect(() => {
+    let ignore = false
+    async function load() {
+      setErr('')
+      try {
+        const res = await fetch(`/api/articles/${articleId}/chat`)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = await res.json()
+        if (ignore) return
+        setAuthor(data?.author || author)
+        setMessages(Array.isArray(data?.messages) ? data.messages.map(m => ({ role: m.role === 'user' ? 'user' : 'ai', content: m.content })) : [])
+      } catch (e) {
+        if (!ignore) setErr('Failed to load conversation')
+      }
+    }
+    load()
+    return () => { ignore = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [articleId])
+
   async function send() {
     const msg = text.trim()
     if (!msg || busy) return
@@ -30,7 +50,8 @@ function ArticleChat({ articleId, initialAuthor }) {
       const reply = (data?.reply || '').trim()
       setMessages(m => [...m, { role: 'ai', content: reply || '(no reply)' }])
     } catch (e) {
-      setErr('Failed to send message')
+      if (e?.message?.includes('429')) setErr('You are sending messages too quickly. Please wait a moment.')
+      else setErr('Failed to send message')
     } finally {
       setBusy(false)
     }
@@ -45,7 +66,19 @@ function ArticleChat({ articleId, initialAuthor }) {
 
   return (
     <div className="rounded-lg border border-slate-200/60 dark:border-slate-700/60 bg-white dark:bg-slate-900/40">
-      <div className="px-3 py-2 border-b border-slate-200/60 dark:border-slate-700/60 text-sm text-slate-600 dark:text-slate-300">Discuss with {author}</div>
+      <div className="px-3 py-2 border-b border-slate-200/60 dark:border-slate-700/60 text-sm text-slate-600 dark:text-slate-300 flex items-center">
+        <div className="flex-1">Discuss with {author}</div>
+        <button onClick={async ()=>{
+          setErr('')
+          try {
+            const res = await fetch(`/api/articles/${articleId}/chat`, { method: 'DELETE' })
+            if (!res.ok) throw new Error('HTTP '+res.status)
+            setMessages([])
+          } catch (e) {
+            setErr('Failed to clear conversation')
+          }
+        }} className="text-xs px-2 py-1 rounded-md border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800">Clear</button>
+      </div>
       <div className="p-3 space-y-2 max-h-64 overflow-auto">
         {messages.length === 0 && (
           <div className="text-sm text-slate-500">Start the conversation — ask a question about this article.</div>

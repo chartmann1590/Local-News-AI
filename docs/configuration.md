@@ -14,6 +14,7 @@ Set these in `docker-compose.yml` (or an `.env` file referenced by Compose):
 - `TTS_BASE_URL` — Base URL for the TTS server used when no in-app setting is saved (default `http://tts:5500`). When using the provided Compose file, the built-in OpenTTS service is reachable at `http://tts:5500` from the app container.
 - `FEED_EXTRA_URLS` — Comma-separated RSS feed URLs to include in harvesting.
 - `LOG_LEVEL` — Logging level (`INFO`, `DEBUG`, etc.).
+- `CHAT_RATE_LIMIT_PER_MIN` — Per-IP, per-article chat limit per minute (default `10`). Excess requests return HTTP `429`.
 
 Data volume:
 

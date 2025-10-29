@@ -18,9 +18,13 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
   - Response: `{ items, page, limit, total, pages }` where each item includes:
     - `id`, `title`, `source`, `source_url`, `image_url`, `published_at`, `fetched_at`, `ai_model`, `ai_body`, `rewrite_note`, `byline` (present for non-fallback AI articles).
 
+- GET `/api/articles/{id}/chat`
+  - Returns `{ author, messages: [{ role, content, created_at }] }` for the article.
 - POST `/api/articles/{id}/chat`
   - Body: `{ message: string, history?: [{ role: 'user'|'assistant', content: string }, ...] }`.
-  - Returns `{ author: string, reply: string }` — the AI reply uses the article’s generated author name.
+  - Returns `{ author: string, reply: string }` — the AI reply uses the article’s generated author name. May return `429` if rate-limited.
+- DELETE `/api/articles/{id}/chat`
+  - Clears the conversation for the article. Returns `{ status: "cleared" }`.
 
 ## Harvest & Jobs
 

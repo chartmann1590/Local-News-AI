@@ -30,3 +30,9 @@ This page lists common customization points and their code locations.
 - Web code lives under `web/src/ui`. The main app is `web/src/ui/App.jsx`.
 - Build is handled via Vite during the Docker image build and served under `/static` by the backend.
 
+## Article Chat
+
+- Author name: generated via `_funny_author_for(article)` in `app/main.py`. You can adjust the lists/format to change the byline style.
+- Rate limit: set `CHAT_RATE_LIMIT_PER_MIN` to control per-IP per-article chat throughput (default 10). For heavier use, consider a smarter token bucket in Redis.
+- Max input length: chat messages are trimmed to 2000 chars; the article context is capped in `generate_article_comment()`.
+- Model/base URL: chat uses the same Ollama settings as article rewrites (`/api/settings`).
