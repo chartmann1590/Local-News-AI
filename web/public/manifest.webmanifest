@@ -1,0 +1,21 @@
+{
+  "name": "Local News & Weather",
+  "short_name": "News AI",
+  "id": "news-ai",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b1220",
+  "theme_color": "#0b1220",
+  "description": "Local news summaries and AI weather for your area.",
+  "lang": "en-US",
+  "dir": "ltr",
+  "orientation": "portrait-primary",
+  "categories": ["news", "weather", "utilities"],
+  "icons": [
+    { "src": "icons/icon-192.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" },
+    { "src": "icons/icon-512.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
+

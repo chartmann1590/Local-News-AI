@@ -43,3 +43,12 @@
 - Browser autoplay policies may block audio until user interaction; click Play again after interacting with the page.
 - If preview works but article/weather audio fails, confirm articles have `ai_body` and a weather report exists.
 - Check the network tab for `/api/tts/...` requests; 400 indicates TTS disabled, 502 indicates the TTS server is unreachable.
+
+## Theme toggle doesn’t change colors
+
+- The UI uses compiled Tailwind with class-based dark mode. If the theme icon changes but colors don’t:
+  - Hard refresh the page to clear cached CSS and service worker content.
+  - Ensure the `<html>` element has the `dark` class when dark mode is active (Developer Tools → Elements).
+  - Rebuild and recreate the app container to pick up CSS changes:
+    - `docker compose build app && docker compose up -d --no-deps --force-recreate app`
+  - If multiple clients are affected, consider bumping the cache name in `web/public/sw.js` and rebuilding to force a fresh cache.

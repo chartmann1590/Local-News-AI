@@ -28,7 +28,21 @@ This page lists common customization points and their code locations.
 ## UI Tweaks
 
 - Web code lives under `web/src/ui`. The main app is `web/src/ui/App.jsx`.
-- Build is handled via Vite during the Docker image build and served under `/static` by the backend.
+- Build is handled via Vite + PostCSS (Tailwind) during the Docker image build and served under `/static` by the backend.
+
+### Theme & Styles (Tailwind)
+
+- Tailwind is compiled (no CDN) with `darkMode: 'class'`.
+  - Config: `web/tailwind.config.js` (includes the Typography plugin).
+  - CSS entry: `web/src/index.css` (imported in `web/src/main.jsx`).
+- The theme toggle in the header adds/removes the `dark` class on `html` (and `body` as a fallback) and persists the preference in `localStorage`.
+  - Early theme selection runs in `web/index.html` to avoid flashes of incorrect theme.
+- After changing styles or Tailwind config, rebuild the image and recreate the app container:
+
+```
+docker compose build app
+docker compose up -d --no-deps --force-recreate app
+```
 
 ## Article Chat
 

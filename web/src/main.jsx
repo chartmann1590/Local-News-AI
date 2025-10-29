@@ -1,5 +1,6 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
+import './index.css'
 import App from './ui/App.jsx'
 import ErrorBoundary from './ui/ErrorBoundary.jsx'
 
@@ -47,3 +48,10 @@ root.render(
     </ErrorBoundary>
   </React.StrictMode>
 )
+
+// Register service worker in production builds
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/static/sw.js').catch(() => {})
+  })
+}

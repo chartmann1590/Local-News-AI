@@ -2,6 +2,105 @@ import React, { useEffect, useState, useMemo } from 'react'
 import AudioPlayer from './AudioPlayer.jsx'
 import { SkeletonCard } from './Skeleton.jsx'
 
+function SplashScreen({ show }) {
+  if (!show) return null
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white dark:bg-slate-900">
+      <div className="text-center">
+        <div className="text-5xl mb-4">📰</div>
+        <div className="text-xl font-semibold mb-2">Local News & Weather</div>
+        <div className="flex items-center justify-center gap-2 text-slate-600 dark:text-slate-300">
+          <span className="inline-block w-4 h-4 rounded-full border-2 border-slate-300 border-t-blue-600 animate-spin" aria-hidden="true"></span>
+          <span>Loading…</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PwaInstallPrompt() {
+  const [deferred, setDeferred] = useState(null)
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    const dismissed = localStorage.getItem('pwa-install-dismissed')
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone
+    if (isStandalone) return
+    function onBeforeInstall(e) {
+      e.preventDefault()
+      if (dismissed) return // user dismissed recently
+      setDeferred(e)
+      setVisible(true)
+    }
+    function onInstalled() {
+      setVisible(false)
+      setDeferred(null)
+    }
+    window.addEventListener('beforeinstallprompt', onBeforeInstall)
+    window.addEventListener('appinstalled', onInstalled)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstall)
+      window.removeEventListener('appinstalled', onInstalled)
+    }
+  }, [])
+
+  if (!visible) return null
+
+  function install() {
+    if (!deferred) return
+    deferred.prompt()
+    deferred.userChoice.finally(() => {
+      setVisible(false)
+      setDeferred(null)
+    })
+  }
+  function dismiss() {
+    try { localStorage.setItem('pwa-install-dismissed', String(Date.now())) } catch (_) {}
+    setVisible(false)
+  }
+
+  return (
+    <div className="fixed bottom-4 left-4 right-4 z-40">
+      <div className="mx-auto max-w-[1100px] rounded-xl shadow-lg border border-slate-200/60 dark:border-slate-700/60 bg-white dark:bg-slate-800 px-4 py-3 flex items-center gap-3">
+        <div className="text-2xl">📲</div>
+        <div className="flex-1 min-w-0">
+          <div className="font-medium truncate">Install as an app</div>
+          <div className="text-sm text-slate-600 dark:text-slate-300 truncate">Add to your home screen for faster access.</div>
+        </div>
+        <button onClick={dismiss} className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700">Not now</button>
+        <button onClick={install} className="px-3 py-2 rounded-md bg-blue-600 text-white">Install</button>
+      </div>
+    </div>
+  )
+}
+
+function ThemeToggle() {
+  const [isDark, setIsDark] = useState(false)
+  useEffect(() => {
+    setIsDark(document.documentElement.classList.contains('dark'))
+  }, [])
+  function toggle() {
+    const next = !isDark
+    setIsDark(next)
+    const root = document.documentElement
+    const body = document.body
+    if (next) { root.classList.add('dark'); body && body.classList.add('dark') }
+    else { root.classList.remove('dark'); body && body.classList.remove('dark') }
+    try { localStorage.setItem('theme', next ? 'dark' : 'light') } catch (_) {}
+  }
+  const label = isDark ? 'Switch to light mode' : 'Switch to dark mode'
+  return (
+    <button
+      onClick={toggle}
+      title={label}
+      aria-label={label}
+      className="px-2 py-2 rounded-md border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800"
+    >
+      {isDark ? '🌞' : '🌙'}
+    </button>
+  )
+}
+
 function ArticleChat({ articleId, initialAuthor }) {
   const [messages, setMessages] = useState([])
   const [author, setAuthor] = useState(initialAuthor || 'Local Desk')
@@ -110,10 +209,13 @@ function Header({ location, onRunNow, running, onOpenSettings }) {
             <div className="text-xl font-semibold truncate">Local News & Weather</div>
             <div className="text-sm text-slate-500 truncate">Powered by Ollama · {location || 'Resolving…'}</div>
           </div>
-          <button disabled={running} onClick={onRunNow} className={`px-4 py-2 rounded-md ${running ? 'bg-slate-400' : 'bg-blue-600 hover:bg-blue-700'} text-white transition-colors`}>
-            {running ? 'Running…' : 'Run Now'}
-          </button>
-          <button onClick={onOpenSettings} className="ml-2 px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 transition-colors">Settings</button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <ThemeToggle />
+            <button disabled={running} onClick={onRunNow} className={`px-3 md:px-4 py-2 rounded-md ${running ? 'bg-slate-400' : 'bg-blue-600 hover:bg-blue-700'} text-white transition-colors`}>
+              {running ? 'Running…' : 'Run Now'}
+            </button>
+            <button onClick={onOpenSettings} className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 transition-colors">Settings</button>
+          </div>
         </div>
       </div>
     </header>
@@ -288,6 +390,7 @@ export default function App() {
   const [running, setRunning] = useState(false)
   const [status, setStatus] = useState(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [showSplash, setShowSplash] = useState(true)
 
   async function loadAll() {
     const t0 = performance.now()
@@ -325,6 +428,12 @@ export default function App() {
     const t = setInterval(loadAll, 30000)
     return () => clearInterval(t)
   }, [page])
+
+  // Splash screen visible for ~5s
+  useEffect(() => {
+    const t = setTimeout(() => setShowSplash(false), 5000)
+    return () => clearTimeout(t)
+  }, [])
 
   async function loadStatus() {
     try {
@@ -379,6 +488,7 @@ export default function App() {
 
   return (
     <>
+      <SplashScreen show={showSplash} />
       <Header location={config?.location} running={running} onRunNow={onRunNow} onOpenSettings={() => setShowSettings(true)} />
       <div className="max-w-[1100px] mx-auto px-4 mt-3">
         <StatusBar status={status} />
@@ -420,6 +530,7 @@ export default function App() {
       <footer className="max-w-[1100px] mx-auto px-4 pb-12 text-sm text-slate-500">
         Built from free sources (RSS + Open‑Meteo). AI rewrites cite originals.
       </footer>
+      <PwaInstallPrompt />
     </>
   )
 }

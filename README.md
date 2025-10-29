@@ -11,6 +11,7 @@ Features
 - Pagination (10/page), live progress, “Now rewriting” details, single-threaded rewrites
 - Optional offline Text-to-Speech (Piper via OpenTTS) for articles and weather
 - Per-article AI comments: click Comments under any article to chat with the AI using the article’s content; replies use the article’s generated author name
+- Light/Dark theme toggle with persistent preference
 
 Quick Start
 1) Requirements
@@ -28,6 +29,7 @@ Quick Start
 
 Using the App
 - Header → Run Now to trigger an immediate harvest
+- Header → Theme button toggles between light and dark modes
 - Weather (left): AI report, 5-day icons, radar
 - News (right): latest local articles with rewrites, bylines, and pagination
 - Article Chat: expand Comments on any article to ask questions about it; the AI replies using only that article’s details
@@ -50,6 +52,7 @@ Notes
 - APScheduler handles internal schedules
 - On Linux, if `host.docker.internal` is unavailable, set `OLLAMA_BASE_URL` to your host IP (e.g., `http://172.17.0.1:11434`)
 - Chat rate limiting: env `CHAT_RATE_LIMIT_PER_MIN` controls per-IP per-article limit (default 10)
+- Frontend styling uses compiled Tailwind CSS (darkMode: 'class'); to apply UI changes rebuild the `app` image and recreate the container
 
 Text‑to‑Speech (TTS)
 - Self‑hosted, free, offline TTS using OpenTTS (Piper engine) in its own container.

@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Ensure base page colors align with theme */
+/* Keep classes on <body> in index.html; this is just a fallback. */
+html, body {
+  min-height: 100%;
+}
+

@@ -34,6 +34,12 @@ Open the app: http://localhost:18080
 
 ## Common Commands
 
-- Rebuild image: `docker compose build`
+- Rebuild all: `docker compose build`
+- Rebuild just the app (frontend/backend image): `docker compose build app`
+- Apply new image without touching dependencies: `docker compose up -d --no-deps --force-recreate app`
 - Tail logs: `docker compose logs -f`
 - Stop: `docker compose down`
+
+### Browser cache tip
+
+- If UI styles don’t update (e.g., theme toggle seems ineffective), hard refresh the browser to clear cached assets and service worker content.
