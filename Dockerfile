@@ -4,6 +4,11 @@ COPY web/package.json /web/package.json
 COPY web/package-lock.json /web/package-lock.json
 RUN npm ci --no-audit --no-fund || npm install --no-audit --no-fund
 COPY web /web
+# Generate required PNG icons for PWA install (Chrome needs PNG)
+RUN apk add --no-cache imagemagick librsvg \
+ && convert -background none -density 256x256 -resize 192x192 /web/public/icons/icon-192.svg /web/public/icons/icon-192.png \
+ && convert -background none -density 512x512 -resize 512x512 /web/public/icons/icon-512.svg /web/public/icons/icon-512.png \
+ && convert -background none -density 512x512 -resize 512x512 /web/public/icons/icon-maskable.svg /web/public/icons/icon-maskable.png
 RUN npm run build
 
 FROM python:3.11-slim
