@@ -66,11 +66,10 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     
     try {
       final uri = Uri.parse(widget.article.sourceUrl!);
-      if (await canLaunchUrl(uri)) {
-        LoggerService().logInfo('ArticleDetailScreen', 'Launching URL');
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } else {
-        LoggerService().logError('ArticleDetailScreen', 'Open Source URL', Exception('Cannot launch URL'));
+      LoggerService().logInfo('ArticleDetailScreen', 'Launching URL');
+      final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!launched) {
+        throw Exception('Cannot launch URL');
       }
     } catch (e) {
       LoggerService().logError('ArticleDetailScreen', 'Open Source URL', e);
@@ -228,4 +227,3 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     );
   }
 }
-

@@ -127,7 +127,7 @@ class _ServerConfigScreenState extends State<ServerConfigScreen> {
       LoggerService().logInfo('ServerConfigScreen', 'Config Saved', details: 'Navigating to home');
       
       if (mounted) {
-        Navigator.of(context).pushReplacementNamed('/');
+        Navigator.of(context).pushReplacementNamed('/home');
       }
     } catch (e) {
       LoggerService().logError('ServerConfigScreen', 'Save Config', e);
@@ -307,4 +307,3 @@ class _ServerConfigScreenState extends State<ServerConfigScreen> {
     );
   }
 }
-

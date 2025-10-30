@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:async';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../models/article.dart';
 import '../models/weather.dart';
@@ -36,24 +38,30 @@ class ApiService {
     final url = Uri.parse('$baseUrl$endpoint');
     LoggerService().logInfo('API', 'GET Request', details: 'URL: $url, Screen: ${screenContext ?? "Unknown"}');
     
-    try {
-      final response = await http.get(
-        url,
-        headers: headers ?? {'Content-Type': 'application/json'},
-      ).timeout(Constants.connectionTimeout);
-      
-      LoggerService().logInfo('API', 'GET Response', details: 'Status: ${response.statusCode}, Endpoint: $endpoint');
-      
-      if (response.statusCode == 200) {
-        return json.decode(response.body) as Map<String, dynamic>;
-      } else {
-        final error = Exception('Failed to load: ${response.statusCode}');
-        LoggerService().logError('API', 'GET $endpoint', error, details: 'Status: ${response.statusCode}, Body: ${response.body.substring(0, response.body.length > 200 ? 200 : response.body.length)}');
-        throw error;
+    int attempt = 0;
+    final maxAttempts = 3;
+    while (true) {
+      attempt++;
+      try {
+        final response = await http
+            .get(url, headers: headers ?? {'Content-Type': 'application/json'})
+            .timeout(Constants.connectionTimeout);
+        LoggerService().logInfo('API', 'GET Response', details: 'Status: ${response.statusCode}, Endpoint: $endpoint');
+        if (response.statusCode == 200) {
+          return json.decode(response.body) as Map<String, dynamic>;
+        } else {
+          final error = Exception('Failed to load: ${response.statusCode}');
+          LoggerService().logError('API', 'GET $endpoint', error, details: 'Status: ${response.statusCode}, Body: ${response.body.substring(0, response.body.length > 200 ? 200 : response.body.length)}');
+          throw error;
+        }
+      } catch (e) {
+        final isRetryable = e is TimeoutException || e is SocketException;
+        LoggerService().logError('API', 'GET $endpoint', e, details: 'URL: $url, Attempt: $attempt/${maxAttempts}');
+        if (!isRetryable || attempt >= maxAttempts) rethrow;
+        // Backoff before retry
+        await Future.delayed(Duration(milliseconds: 300 * attempt));
+        continue;
       }
-    } catch (e) {
-      LoggerService().logError('API', 'GET $endpoint', e, details: 'URL: $url');
-      rethrow;
     }
   }
   
@@ -67,32 +75,34 @@ class ApiService {
     final url = Uri.parse('$baseUrl$endpoint');
     LoggerService().logInfo('API', 'POST Request', details: 'URL: $url, Body: ${body != null ? json.encode(body).substring(0, body.toString().length > 200 ? 200 : body.toString().length) : "null"}, Screen: ${screenContext ?? "Unknown"}');
     
-    try {
-      final response = await http.post(
-        url,
-        headers: headers ?? {'Content-Type': 'application/json'},
-        body: body != null ? json.encode(body) : null,
-      ).timeout(Constants.connectionTimeout);
-      
-      LoggerService().logInfo('API', 'POST Response', details: 'Status: ${response.statusCode}, Endpoint: $endpoint');
-      
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        if (response.body.isEmpty) {
-          return {};
+    int attempt = 0;
+    final maxAttempts = 2;
+    while (true) {
+      attempt++;
+      try {
+        final response = await http
+            .post(url, headers: headers ?? {'Content-Type': 'application/json'}, body: body != null ? json.encode(body) : null)
+            .timeout(Constants.connectionTimeout);
+        LoggerService().logInfo('API', 'POST Response', details: 'Status: ${response.statusCode}, Endpoint: $endpoint');
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          if (response.body.isEmpty) return {};
+          return json.decode(response.body) as Map<String, dynamic>;
+        } else if (response.statusCode == 429) {
+          final error = Exception('Rate limit exceeded. Please wait a moment.');
+          LoggerService().logError('API', 'POST $endpoint', error, details: 'Rate limited');
+          throw error;
+        } else {
+          final error = Exception('Failed to post: ${response.statusCode}');
+          LoggerService().logError('API', 'POST $endpoint', error, details: 'Status: ${response.statusCode}, Body: ${response.body.substring(0, response.body.length > 200 ? 200 : response.body.length)}');
+          throw error;
         }
-        return json.decode(response.body) as Map<String, dynamic>;
-      } else if (response.statusCode == 429) {
-        final error = Exception('Rate limit exceeded. Please wait a moment.');
-        LoggerService().logError('API', 'POST $endpoint', error, details: 'Rate limited');
-        throw error;
-      } else {
-        final error = Exception('Failed to post: ${response.statusCode}');
-        LoggerService().logError('API', 'POST $endpoint', error, details: 'Status: ${response.statusCode}, Body: ${response.body.substring(0, response.body.length > 200 ? 200 : response.body.length)}');
-        throw error;
+      } catch (e) {
+        final isRetryable = e is TimeoutException || e is SocketException;
+        LoggerService().logError('API', 'POST $endpoint', e, details: 'URL: $url, Attempt: $attempt/${maxAttempts}');
+        if (!isRetryable || attempt >= maxAttempts) rethrow;
+        await Future.delayed(Duration(milliseconds: 300 * attempt));
+        continue;
       }
-    } catch (e) {
-      LoggerService().logError('API', 'POST $endpoint', e, details: 'URL: $url');
-      rethrow;
     }
   }
   
@@ -271,4 +281,3 @@ class ApiService {
     await _post(Constants.locationEndpoint, body: {'location': location}, screenContext: screenContext ?? 'SettingsScreen');
   }
 }
-
