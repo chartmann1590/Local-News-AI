@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import FastAPI, Request
@@ -14,6 +14,7 @@ import logging
 import time
 
 from .database import init_db, SessionLocal
+from sqlalchemy import func, case
 from .models import Article, WeatherReport, AppConfig, AppSettings, TTSSettings, ChatMessage
 from .scheduler import start_scheduler, run_harvest_once
 from . import maintenance
@@ -194,9 +195,15 @@ def _latest_weather(session: SessionLocal) -> Optional[WeatherReport]:
 
 
 def _latest_articles(session: SessionLocal, limit: int = 30, offset: int = 0) -> List[Article]:
+    # Primary sort: published_at DESC when available. Items missing published_at come after,
+    # and are sorted by fetched_at DESC.
     return (
         session.query(Article)
-        .order_by(Article.fetched_at.desc())
+        .order_by(
+            case((Article.published_at.is_(None), 1), else_=0),
+            Article.published_at.desc(),
+            Article.fetched_at.desc(),
+        )
         .offset(int(offset))
         .limit(int(limit))
         .all()
@@ -279,8 +286,14 @@ def api_articles(page: int = 1, limit: int = 10):
             page = pages
         offset = (page - 1) * limit
         arts = _latest_articles(session, limit=limit, offset=offset)
-        items = [
-            {
+        items = []
+        for a in arts:
+            # Compute numeric sort timestamp in UTC milliseconds
+            base_dt = a.published_at or a.fetched_at
+            if base_dt is not None and base_dt.tzinfo is None:
+                base_dt = base_dt.replace(tzinfo=timezone.utc)
+            sort_ts = int(base_dt.timestamp() * 1000) if base_dt else None
+            items.append({
                 "id": a.id,
                 "title": a.ai_title or a.source_title,
                 "source": a.source_name,
@@ -288,13 +301,12 @@ def api_articles(page: int = 1, limit: int = 10):
                 "image_url": a.image_url,
                 "published_at": a.published_at.isoformat() if a.published_at else None,
                 "fetched_at": a.fetched_at.isoformat(),
+                "sort_ts": sort_ts,
                 "ai_model": a.ai_model,
                 "ai_body": a.ai_body,
                 "byline": _funny_author_for(a) if (a.ai_body and not (a.ai_model or "").startswith("fallback:")) else None,
                 "rewrite_note": ("Showing original text (AI unavailable)" if (a.ai_model or "").startswith("fallback:") else None),
-            }
-            for a in arts
-        ]
+            })
         logger.info("api:articles", extra={"count": len(items), "page": page, "limit": limit, "total": total})
         return {"items": items, "page": page, "limit": limit, "total": total, "pages": pages}
     finally:

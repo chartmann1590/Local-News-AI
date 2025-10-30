@@ -6,6 +6,7 @@ class Article {
   final String? imageUrl;
   final String? publishedAt;
   final String? fetchedAt;
+  final int? sortTs;
   final String? aiBody;
   final String? aiModel;
   final String? rewriteNote;
@@ -20,6 +21,7 @@ class Article {
     this.imageUrl,
     this.publishedAt,
     this.fetchedAt,
+    this.sortTs,
     this.aiBody,
     this.aiModel,
     this.rewriteNote,
@@ -36,6 +38,7 @@ class Article {
       imageUrl: json['image_url'] as String?,
       publishedAt: json['published_at'] as String?,
       fetchedAt: json['fetched_at'] as String?,
+      sortTs: json['sort_ts'] as int?,
       aiBody: json['ai_body'] as String?,
       aiModel: json['ai_model'] as String?,
       rewriteNote: json['rewrite_note'] as String?,
@@ -50,4 +53,6 @@ class Article {
     : (aiBody ?? '');
   bool get hasMore => (aiBody ?? '').length > 500;
 }
+
+
 

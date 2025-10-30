@@ -25,7 +25,56 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- Deep link for news articles -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="news" android:host="article"/>
+            </intent-filter>
+            <!-- Deep link for weather -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="news" android:host="weather"/>
+            </intent-filter>
         </activity>
+        
+        <!-- News Widget Provider -->
+        <receiver
+            android:name=".NewsWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/news_widget_info"/>
+        </receiver>
+        
+        <!-- News Widget Service -->
+        <service
+            android:name=".NewsWidgetService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS"/>
+        
+        <!-- Weather Widget Provider -->
+        <receiver
+            android:name=".WeatherWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/weather_widget_info"/>
+        </receiver>
+        
+        <!-- Weather Widget Update Service -->
+        <service
+            android:name=".WeatherWidgetUpdateService"
+            android:exported="false" />
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />

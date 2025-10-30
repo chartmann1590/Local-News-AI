@@ -418,7 +418,11 @@ export default function App() {
       const items = (aR.items || aR || []).map(a => ({
         ...a,
         title: a.title || a.source_title || 'Untitled',
-      }))
+      })).sort((a, b) => {
+        const sta = Number.isFinite(a.sort_ts) ? a.sort_ts : (new Date(a.published_at || a.fetched_at || 0)).getTime()
+        const stb = Number.isFinite(b.sort_ts) ? b.sort_ts : (new Date(b.published_at || b.fetched_at || 0)).getTime()
+        return stb - sta
+      })
       setArticles(items)
       setPages(aR.pages || Math.max(1, Math.ceil((aR.total || items.length) / pageSize)))
       // eslint-disable-next-line no-console

@@ -19,7 +19,7 @@ class Constants {
   
   // Timeouts
   // Mobile networks can be variable; allow a bit more time and retry in ApiService
-  static const Duration connectionTimeout = Duration(seconds: 20);
+  static const Duration connectionTimeout = Duration(minutes: 3);
   static const Duration ttsTimeout = Duration(minutes: 3);
   static const Duration splashScreenDuration = Duration(seconds: 5);
   static const Duration autoRefreshInterval = Duration(seconds: 30);

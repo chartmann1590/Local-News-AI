@@ -67,6 +67,12 @@ class _NewsScreenState extends State<NewsScreen> {
         final items = (response['items'] as List<dynamic>? ?? [])
             .map((item) => Article.fromJson(item as Map<String, dynamic>))
             .toList();
+        // Sort newest first using server-provided sortTs when available
+        items.sort((a, b) {
+          final int sb = b.sortTs ?? DateTime.tryParse(b.publishedAt ?? b.fetchedAt ?? '')?.millisecondsSinceEpoch ?? 0;
+          final int sa = a.sortTs ?? DateTime.tryParse(a.publishedAt ?? a.fetchedAt ?? '')?.millisecondsSinceEpoch ?? 0;
+          return sb.compareTo(sa);
+        });
         
         LoggerService().logInfo('NewsScreen', 'Articles Loaded', details: 'Count: ${items.length}, Total: ${response['total']}, Pages: ${response['pages']}');
         

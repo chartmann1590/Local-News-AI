@@ -121,3 +121,5 @@ The app communicates with the News AI backend using the following endpoints:
 
 This app is part of the News AI project.
 
+
+

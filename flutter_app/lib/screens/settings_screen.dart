@@ -203,7 +203,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final logContent = await LoggerService().getLogsAsString();
       final logFile = await LoggerService().getLogFile();
-      
+
       if (logContent.isEmpty) {
         LoggerService().logWarning('SettingsScreen', 'Email Logs', details: 'No logs to send');
         if (mounted) {
@@ -216,23 +216,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
         return;
       }
-      
+
       // Create mailto URI with subject and body
       final subject = Uri.encodeComponent('News AI App Logs - ${DateTime.now().toIso8601String()}');
       final body = Uri.encodeComponent('Please find attached the app logs.\n\n${logContent.substring(0, logContent.length > 10000 ? 10000 : logContent.length)}');
-      
+
       final uri = Uri.parse('mailto:?subject=$subject&body=$body');
-      
-      if (await canLaunchUrl(uri)) {
+
+      // Try to launch email client directly with external application mode
+      // Don't use canLaunchUrl as it often returns false for mailto on Android
+      try {
         LoggerService().logInfo('SettingsScreen', 'Launch Email Client');
-        await launchUrl(uri);
-      } else {
-        LoggerService().logError('SettingsScreen', 'Email Logs', Exception('Cannot launch email client'));
+        final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+        if (!launched) {
+          throw Exception('Failed to launch email client');
+        }
+      } catch (launchError) {
+        LoggerService().logError('SettingsScreen', 'Email Logs', launchError);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Cannot open email client'),
+              content: Text('Cannot open email client. Please make sure you have an email app installed.'),
               backgroundColor: Colors.red,
+              duration: Duration(seconds: 4),
             ),
           );
         }
