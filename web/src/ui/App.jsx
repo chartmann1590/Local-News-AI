@@ -204,17 +204,45 @@ function ArticleChat({ articleId, initialAuthor }) {
   )
 }
 
-function Header({ location, onRunNow, running, onOpenSettings }) {
+function SearchBar({ value, onChange, onKeyDown }) {
+  return (
+    <div className="flex-1 max-w-md">
+      <div className="relative">
+        <input
+          type="text"
+          value={value}
+          onChange={onChange}
+          onKeyDown={onKeyDown}
+          placeholder="Search articles..."
+          className="w-full px-4 py-2 pl-10 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">🔍</span>
+      </div>
+    </div>
+  )
+}
+
+function Header({ location, onRunNow, running, onOpenSettings, searchQuery, onSearchChange }) {
   return (
     <header>
       <div className="h-1 bg-gradient-to-r from-blue-500 via-cyan-500 to-emerald-500" />
       <div className="bg-white/80 dark:bg-slate-900/80 backdrop-blur supports-[backdrop-filter]:bg-white/60 dark:supports-[backdrop-filter]:bg-slate-900/60 border-b border-slate-200/60 dark:border-slate-800">
-        <div className="max-w-[1100px] mx-auto px-4 py-4 flex items-center gap-4">
+        <div className="max-w-[1100px] mx-auto px-4 py-4 flex items-center gap-4 flex-wrap">
           <div className="text-2xl">📰</div>
           <div className="flex-1 min-w-0">
             <div className="text-xl font-semibold truncate">Local News & Weather</div>
             <div className="text-sm text-slate-500 truncate">Powered by Ollama · {location || 'Resolving…'}</div>
           </div>
+          <SearchBar 
+            value={searchQuery} 
+            onChange={(e) => onSearchChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                onSearchChange('')
+                e.target.blur()
+              }
+            }}
+          />
           <div className="flex items-center gap-2 flex-wrap">
             <ThemeToggle />
             <a href="/static/news-ai-app.apk" download="news-ai-app.apk" className="px-3 md:px-4 py-2 rounded-md bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white transition-all shadow-md hover:shadow-lg flex items-center gap-2">
@@ -317,18 +345,47 @@ function Weather({ weather, tts }) {
   )
 }
 
-function ArticleCard({ a, tts }) {
+function ArticleCard({ a, tts, onBookmarkChange }) {
   const preview = useMemo(() => (a.preview || (a.ai_body || '')).slice(0, 500), [a])
   const hasMore = (a.ai_body || '').length > preview.length
   const [open, setOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
+  const [isBookmarked, setIsBookmarked] = useState(a.is_bookmarked || false)
+  const [bookmarkLoading, setBookmarkLoading] = useState(false)
+
+  async function toggleBookmark() {
+    setBookmarkLoading(true)
+    try {
+      const res = await fetch(`/api/articles/${a.id}/bookmark`, { method: 'POST' })
+      if (!res.ok) throw new Error('Failed to toggle bookmark')
+      const data = await res.json()
+      setIsBookmarked(data.bookmarked)
+      if (onBookmarkChange) onBookmarkChange(a.id, data.bookmarked)
+    } catch (e) {
+      console.error('Bookmark toggle failed', e)
+    } finally {
+      setBookmarkLoading(false)
+    }
+  }
+
   return (
     <article className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200/60 dark:border-slate-700/60 overflow-hidden">
       {a.image_url && <img src={a.image_url} alt="" className="w-full h-44 object-cover"/>}
       <div className="p-5">
-        <div className="text-xs text-slate-500 flex gap-3 mb-1">
-          <span>{a.published_at ? new Date(a.published_at).toLocaleString() : new Date(a.fetched_at).toLocaleString()}</span>
-          {a.source && <span>• {a.source}</span>}
+        <div className="flex items-start justify-between mb-2">
+          <div className="text-xs text-slate-500 flex gap-3 flex-1">
+            <span>{a.published_at ? new Date(a.published_at).toLocaleString() : new Date(a.fetched_at).toLocaleString()}</span>
+            {a.source && <span>• {a.source}</span>}
+          </div>
+          <button 
+            onClick={toggleBookmark}
+            disabled={bookmarkLoading}
+            className={`ml-2 px-2 py-1 rounded-md text-lg transition-colors ${bookmarkLoading ? 'opacity-50' : ''} ${isBookmarked ? 'text-yellow-500 hover:text-yellow-600' : 'text-slate-400 hover:text-yellow-500'}`}
+            title={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}
+            aria-label={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}
+          >
+            {isBookmarked ? '⭐' : '☆'}
+          </button>
         </div>
         <h2 className="text-xl font-semibold mb-1 flex items-center gap-2">{a.title}{a.rewrite_note && (<span className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">{a.rewrite_note}</span>)}</h2>
         {a.byline && <div className="text-xs text-slate-500 mb-2">By {a.byline}</div>}
@@ -356,7 +413,7 @@ function ArticleCard({ a, tts }) {
           </div>
         )}
         {a?.ai_body && (
-          <div className="mt-3">
+          <div className="mt-3 flex items-center gap-2">
             <button onClick={() => setChatOpen(v=>!v)} className="px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50">
               {chatOpen ? 'Hide Comments' : 'Comments'}
             </button>
@@ -459,32 +516,47 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [showSplash, setShowSplash] = useState(true)
   const [showLogsPanel, setShowLogsPanel] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [filterSource, setFilterSource] = useState('')
+  const [sortBy, setSortBy] = useState('date_desc')
+  const [sources, setSources] = useState([])
+  const [showFilters, setShowFilters] = useState(false)
+  const [searchDebounceTimer, setSearchDebounceTimer] = useState(null)
+  const [showBookmarks, setShowBookmarks] = useState(false)
+  const [bookmarkedArticles, setBookmarkedArticles] = useState([])
+  const [bookmarksPage, setBookmarksPage] = useState(1)
+  const [bookmarksPages, setBookmarksPages] = useState(1)
 
   async function loadAll() {
     const t0 = performance.now()
     try {
-      const [cfgR, wR, aR, ttsR] = await Promise.all([
+      const params = new URLSearchParams()
+      params.set('page', String(page))
+      params.set('limit', String(pageSize))
+      if (searchQuery) params.set('q', searchQuery)
+      if (filterSource) params.set('source', filterSource)
+      if (sortBy) params.set('sort_by', sortBy)
+      
+      const [cfgR, wR, aR, ttsR, sourcesR] = await Promise.all([
         fetch('/api/config').then(r => r.json()),
         fetch('/api/weather').then(r => r.json()),
-        fetch(`/api/articles?page=${page}&limit=${pageSize}`).then(r => r.json()),
+        fetch(`/api/articles?${params.toString()}`).then(r => r.json()),
         fetch('/api/tts/settings').then(r => r.json()).catch(()=>null),
+        fetch('/api/articles/sources').then(r => r.json()).catch(()=>({sources: []})),
       ])
       setConfig(cfgR)
       setWeather(wR)
       if (ttsR) setTts(ttsR)
+      if (sourcesR?.sources) setSources(sourcesR.sources)
       const items = (aR.items || aR || []).map(a => ({
         ...a,
         title: a.title || a.source_title || 'Untitled',
-      })).sort((a, b) => {
-        const sta = Number.isFinite(a.sort_ts) ? a.sort_ts : (new Date(a.published_at || a.fetched_at || 0)).getTime()
-        const stb = Number.isFinite(b.sort_ts) ? b.sort_ts : (new Date(b.published_at || b.fetched_at || 0)).getTime()
-        return stb - sta
-      })
+      }))
       setArticles(items)
       setPages(aR.pages || Math.max(1, Math.ceil((aR.total || items.length) / pageSize)))
       // eslint-disable-next-line no-console
       console.info('[App] loadAll ok', `${Math.round(performance.now()-t0)}ms`, {
-        articles: aR?.length ?? 0,
+        articles: aR?.total ?? 0,
         weatherUpdated: wR?.updated_at || null,
         location: cfgR?.location || null,
       })
@@ -495,11 +567,56 @@ export default function App() {
     }
   }
 
+  // Debounced search
+  useEffect(() => {
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer)
+    }
+    const timer = setTimeout(() => {
+      setPage(1) // Reset to first page on search
+      loadAll()
+    }, 300)
+    setSearchDebounceTimer(timer)
+    return () => {
+      if (timer) clearTimeout(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery])
+
+  // Load when filters/sort/page change
+  useEffect(() => {
+    loadAll()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, filterSource, sortBy])
+
+  // Load bookmarked articles
+  async function loadBookmarks(p = 1) {
+    try {
+      const res = await fetch(`/api/articles/bookmarked?page=${p}&limit=${pageSize}`)
+      if (!res.ok) throw new Error('Failed to load bookmarks')
+      const data = await res.json()
+      setBookmarkedArticles(data.items || [])
+      setBookmarksPages(data.pages || 1)
+      setBookmarksPage(p)
+    } catch (e) {
+      console.error('Failed to load bookmarks', e)
+    }
+  }
+
+  useEffect(() => {
+    if (showBookmarks) {
+      loadBookmarks(bookmarksPage)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showBookmarks, bookmarksPage])
+
+  // Initial load and auto-refresh
   useEffect(() => {
     loadAll()
     const t = setInterval(loadAll, 30000)
     return () => clearInterval(t)
-  }, [page])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Splash screen visible for ~5s
   useEffect(() => {
@@ -581,38 +698,114 @@ export default function App() {
   return (
     <>
       <SplashScreen show={showSplash} />
-      <Header location={config?.location} running={running} onRunNow={onRunNow} onOpenSettings={() => setShowSettings(true)} />
+      <Header location={config?.location} running={running} onRunNow={onRunNow} onOpenSettings={() => setShowSettings(true)} searchQuery={searchQuery} onSearchChange={setSearchQuery} />
       <div className="max-w-[1100px] mx-auto px-4 mt-3">
         <StatusBar status={status} timezone={config?.timezone} />
       </div>
-      <div className="max-w-[1100px] mx-auto px-4 mt-2 flex items-center gap-2">
+      <div className="max-w-[1100px] mx-auto px-4 mt-2 flex items-center gap-2 flex-wrap">
+        <button onClick={()=>setShowBookmarks(v=>!v)} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm ${showBookmarks ? 'bg-yellow-50 dark:bg-yellow-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-800'}`}>
+          {showBookmarks ? '📚 Hide Bookmarks' : '⭐ Bookmarks'}
+        </button>
+        <button onClick={()=>setShowFilters(v=>!v)} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm ${showFilters ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-800'}`}>
+          {showFilters ? '▼' : '▶'} Filters
+        </button>
         <button onClick={()=>setShowLogsPanel(v=>!v)} className="px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm hover:bg-slate-50 dark:hover:bg-slate-800">
           {showLogsPanel ? 'Hide Logs' : 'Show Logs'}
         </button>
+        {(searchQuery || filterSource || sortBy !== 'date_desc') && (
+          <button onClick={() => { setSearchQuery(''); setFilterSource(''); setSortBy('date_desc'); setPage(1); }} className="px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm hover:bg-slate-50 dark:hover:bg-slate-800">
+            Clear Filters
+          </button>
+        )}
       </div>
+      {showFilters && (
+        <div className="max-w-[1100px] mx-auto px-4 mt-2 mb-4">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200/60 dark:border-slate-700/60 p-4">
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Filter by Source</label>
+                <select 
+                  value={filterSource} 
+                  onChange={(e) => { setFilterSource(e.target.value); setPage(1); }}
+                  className="w-full px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                >
+                  <option value="">All Sources</option>
+                  {sources.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Sort By</label>
+                <select 
+                  value={sortBy} 
+                  onChange={(e) => { setSortBy(e.target.value); setPage(1); }}
+                  className="w-full px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                >
+                  <option value="date_desc">Date (Newest First)</option>
+                  <option value="date_asc">Date (Oldest First)</option>
+                  <option value="title">Title (A-Z)</option>
+                  <option value="source">Source (A-Z)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} reloadAll={async () => { await loadAll(); await loadStatus(); }} />}
       <LocationBar config={config} onChange={changeLocation} />
       <main className="max-w-[1100px] mx-auto px-4 py-6">
         <div className="grid md:grid-cols-3 gap-6">
           <Weather weather={weather} tts={tts} />
           <section className="md:col-span-2 space-y-4">
-            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200/60 dark:border-slate-700/60">
-              <div className="p-5 border-b border-slate-200/60 dark:border-slate-700/60 flex items-center gap-2">
-                <div className="text-2xl">🗞️</div>
-                <div className="font-semibold">Latest Local News</div>
-                <div className="ml-auto text-sm text-slate-500">Minimum per run: {config?.min_articles ?? 10}</div>
-              </div>
-            </div>
-            <div className="flex items-center justify-between px-5 py-3">
-              <div className="text-sm text-slate-500">Page {page} of {pages}</div>
-              <div className="flex items-center gap-2">
-                <button disabled={page<=1} onClick={()=>setPage(p=>Math.max(1,p-1))} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 ${page<=1 ? 'opacity-50' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'}`}>Prev</button>
-                <button disabled={page>=pages} onClick={()=>setPage(p=>Math.min(pages,p+1))} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 ${page>=pages ? 'opacity-50' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'}`}>Next</button>
-              </div>
-            </div>
-            {articles.length > 0 ? (
-              articles.map(a => <ArticleCard key={a.id} a={a} tts={tts} />)
-            ) : showSkeletons ? (
+            {showBookmarks ? (
+              <>
+                <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200/60 dark:border-slate-700/60">
+                  <div className="p-5 border-b border-slate-200/60 dark:border-slate-700/60 flex items-center gap-2">
+                    <div className="text-2xl">⭐</div>
+                    <div className="font-semibold">Bookmarked Articles</div>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between px-5 py-3">
+                  <div className="text-sm text-slate-500">Page {bookmarksPage} of {bookmarksPages}</div>
+                  <div className="flex items-center gap-2">
+                    <button disabled={bookmarksPage<=1} onClick={()=>setBookmarksPage(p=>Math.max(1,p-1))} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 ${bookmarksPage<=1 ? 'opacity-50' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'}`}>Prev</button>
+                    <button disabled={bookmarksPage>=bookmarksPages} onClick={()=>setBookmarksPage(p=>Math.min(bookmarksPages,p+1))} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 ${bookmarksPage>=bookmarksPages ? 'opacity-50' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'}`}>Next</button>
+                  </div>
+                </div>
+                {bookmarkedArticles.length > 0 ? (
+                  bookmarkedArticles.map(a => <ArticleCard key={a.id} a={a} tts={tts} onBookmarkChange={(articleId, bookmarked) => {
+                    if (!bookmarked) {
+                      // Remove from bookmarks list
+                      setBookmarkedArticles(prev => prev.filter(art => art.id !== articleId))
+                      // Reload to update pagination
+                      loadBookmarks(bookmarksPage)
+                    }
+                  }} />)
+                ) : (
+                  <div className="text-slate-500 text-center py-8">No bookmarked articles yet. Click the ⭐ icon on any article to bookmark it.</div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200/60 dark:border-slate-700/60">
+                  <div className="p-5 border-b border-slate-200/60 dark:border-slate-700/60 flex items-center gap-2">
+                    <div className="text-2xl">🗞️</div>
+                    <div className="font-semibold">Latest Local News</div>
+                    <div className="ml-auto text-sm text-slate-500">Minimum per run: {config?.min_articles ?? 10}</div>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between px-5 py-3">
+                  <div className="text-sm text-slate-500">Page {page} of {pages}</div>
+                  <div className="flex items-center gap-2">
+                    <button disabled={page<=1} onClick={()=>setPage(p=>Math.max(1,p-1))} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 ${page<=1 ? 'opacity-50' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'}`}>Prev</button>
+                    <button disabled={page>=pages} onClick={()=>setPage(p=>Math.min(pages,p+1))} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 ${page>=pages ? 'opacity-50' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'}`}>Next</button>
+                  </div>
+                </div>
+                {articles.length > 0 ? (
+                  articles.map(a => <ArticleCard key={a.id} a={a} tts={tts} onBookmarkChange={(articleId, bookmarked) => {
+                    // Update the article in the list
+                    setArticles(prev => prev.map(art => art.id === articleId ? {...art, is_bookmarked: bookmarked} : art))
+                  }} />)
+                ) : showSkeletons ? (
               <>
                 <SkeletonCard lines={5} />
                 <SkeletonCard lines={6} />
@@ -620,6 +813,8 @@ export default function App() {
               </>
             ) : (
               <div className="text-slate-500">No articles yet. Use Run Now to start.</div>
+            )}
+              </>
             )}
             {showLogsPanel && (
               <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200/60 dark:border-slate-700/60 overflow-hidden">

@@ -14,8 +14,8 @@ import logging
 import time
 
 from .database import init_db, SessionLocal
-from sqlalchemy import func, case
-from .models import Article, WeatherReport, AppConfig, AppSettings, TTSSettings, ChatMessage, MobileLog
+from sqlalchemy import func, case, or_, and_
+from .models import Article, WeatherReport, AppConfig, AppSettings, TTSSettings, ChatMessage, MobileLog, Bookmark
 from .scheduler import start_scheduler, run_harvest_once, restart_scheduler
 from . import maintenance
 import threading
@@ -324,41 +324,220 @@ def index():
 # (moved spa_fallback to the end of file to avoid shadowing API routes)
 
 
+def _build_article_query(session: SessionLocal, q: Optional[str] = None, source: Optional[str] = None, 
+                         date_from: Optional[str] = None, date_to: Optional[str] = None, 
+                         sort_by: Optional[str] = None):
+    """Build article query with filters and sorting."""
+    query = session.query(Article)
+    
+    # Search filter
+    if q and q.strip():
+        search_term = f"%{q.strip()}%"
+        query = query.filter(
+            or_(
+                Article.ai_title.like(search_term),
+                Article.source_title.like(search_term),
+                Article.ai_body.like(search_term),
+                Article.source_name.like(search_term),
+            )
+        )
+    
+    # Source filter
+    if source and source.strip():
+        query = query.filter(Article.source_name == source.strip())
+    
+    # Date range filter
+    if date_from:
+        try:
+            from_dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+            if from_dt.tzinfo is None:
+                from_dt = from_dt.replace(tzinfo=timezone.utc)
+            query = query.filter(
+                or_(
+                    Article.published_at >= from_dt,
+                    and_(Article.published_at.is_(None), Article.fetched_at >= from_dt)
+                )
+            )
+        except (ValueError, AttributeError):
+            pass
+    
+    if date_to:
+        try:
+            to_dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+            if to_dt.tzinfo is None:
+                to_dt = to_dt.replace(tzinfo=timezone.utc)
+            query = query.filter(
+                or_(
+                    Article.published_at <= to_dt,
+                    and_(Article.published_at.is_(None), Article.fetched_at <= to_dt)
+                )
+            )
+        except (ValueError, AttributeError):
+            pass
+    
+    # Sorting
+    sort_by = (sort_by or "date_desc").lower()
+    if sort_by == "date_asc":
+        query = query.order_by(
+            case((Article.published_at.is_(None), 1), else_=0),
+            Article.published_at.asc(),
+            Article.fetched_at.asc(),
+        )
+    elif sort_by == "source":
+        query = query.order_by(Article.source_name.asc(), Article.published_at.desc())
+    elif sort_by == "title":
+        query = query.order_by(
+            func.coalesce(Article.ai_title, Article.source_title).asc(),
+            Article.published_at.desc(),
+        )
+    else:  # date_desc (default)
+        query = query.order_by(
+            case((Article.published_at.is_(None), 1), else_=0),
+            Article.published_at.desc(),
+            Article.fetched_at.desc(),
+        )
+    
+    return query
+
+
+def _article_to_dict(a: Article, session: Optional[SessionLocal] = None, check_bookmark: bool = False) -> dict:
+    """Convert Article model to dict."""
+    base_dt = a.published_at or a.fetched_at
+    if base_dt is not None and base_dt.tzinfo is None:
+        base_dt = base_dt.replace(tzinfo=timezone.utc)
+    sort_ts = int(base_dt.timestamp() * 1000) if base_dt else None
+    result = {
+        "id": a.id,
+        "title": a.ai_title or a.source_title,
+        "source": a.source_name,
+        "source_url": a.source_url,
+        "image_url": a.image_url,
+        "published_at": a.published_at.isoformat() if a.published_at else None,
+        "fetched_at": a.fetched_at.isoformat(),
+        "sort_ts": sort_ts,
+        "ai_model": a.ai_model,
+        "ai_body": a.ai_body,
+        "byline": _funny_author_for(a) if (a.ai_body and not (a.ai_model or "").startswith("fallback:")) else None,
+        "rewrite_note": ("Showing original text (AI unavailable)" if (a.ai_model or "").startswith("fallback:") else None),
+    }
+    # Check if article is bookmarked if requested
+    if check_bookmark and session:
+        bookmark = session.query(Bookmark).filter_by(article_id=a.id).first()
+        result["is_bookmarked"] = bookmark is not None
+    return result
+
+
 @app.get("/api/articles")
-def api_articles(page: int = 1, limit: int = 10):
+def api_articles(page: int = 1, limit: int = 10, q: Optional[str] = None, 
+                 source: Optional[str] = None, date_from: Optional[str] = None, 
+                 date_to: Optional[str] = None, sort_by: Optional[str] = None):
     session = SessionLocal()
     try:
         # Clamp params
         page = max(1, int(page or 1))
         limit = max(1, min(100, int(limit or 10)))
-        total = session.query(Article).count()
+        
+        # Build filtered query
+        query = _build_article_query(session, q=q, source=source, date_from=date_from, 
+                                     date_to=date_to, sort_by=sort_by)
+        
+        # Get total count
+        total = query.count()
         pages = max(1, (total + limit - 1) // limit)
         if page > pages:
             page = pages
+        
+        # Apply pagination
         offset = (page - 1) * limit
-        arts = _latest_articles(session, limit=limit, offset=offset)
-        items = []
-        for a in arts:
-            # Compute numeric sort timestamp in UTC milliseconds
-            base_dt = a.published_at or a.fetched_at
-            if base_dt is not None and base_dt.tzinfo is None:
-                base_dt = base_dt.replace(tzinfo=timezone.utc)
-            sort_ts = int(base_dt.timestamp() * 1000) if base_dt else None
-            items.append({
-                "id": a.id,
-                "title": a.ai_title or a.source_title,
-                "source": a.source_name,
-                "source_url": a.source_url,
-                "image_url": a.image_url,
-                "published_at": a.published_at.isoformat() if a.published_at else None,
-                "fetched_at": a.fetched_at.isoformat(),
-                "sort_ts": sort_ts,
-                "ai_model": a.ai_model,
-                "ai_body": a.ai_body,
-                "byline": _funny_author_for(a) if (a.ai_body and not (a.ai_model or "").startswith("fallback:")) else None,
-                "rewrite_note": ("Showing original text (AI unavailable)" if (a.ai_model or "").startswith("fallback:") else None),
-            })
-        logger.info("api:articles", extra={"count": len(items), "page": page, "limit": limit, "total": total})
+        arts = query.offset(offset).limit(limit).all()
+        
+        items = [_article_to_dict(a, session=session, check_bookmark=True) for a in arts]
+        
+        logger.info("api:articles", extra={
+            "count": len(items), "page": page, "limit": limit, "total": total,
+            "has_search": bool(q), "has_source": bool(source)
+        })
+        return {"items": items, "page": page, "limit": limit, "total": total, "pages": pages}
+    finally:
+        session.close()
+
+
+@app.get("/api/articles/sources")
+def api_articles_sources():
+    """Get list of unique article sources."""
+    session = SessionLocal()
+    try:
+        sources = session.query(Article.source_name)\
+            .filter(Article.source_name.isnot(None))\
+            .distinct()\
+            .order_by(Article.source_name)\
+            .all()
+        source_list = [s[0] for s in sources if s[0]]
+        return {"sources": source_list}
+    finally:
+        session.close()
+
+
+@app.post("/api/articles/{article_id}/bookmark")
+def api_article_bookmark_toggle(article_id: int):
+    """Toggle bookmark status for an article (add if not bookmarked, remove if bookmarked)."""
+    session = SessionLocal()
+    try:
+        # Verify article exists
+        article = session.query(Article).filter_by(id=article_id).one_or_none()
+        if not article:
+            return JSONResponse(status_code=404, content={"error": "article not found"})
+        
+        # Check if already bookmarked
+        bookmark = session.query(Bookmark).filter_by(article_id=article_id).one_or_none()
+        
+        if bookmark:
+            # Remove bookmark
+            session.delete(bookmark)
+            session.commit()
+            logger.info("api:bookmark:removed", extra={"article_id": article_id})
+            return {"bookmarked": False, "action": "removed"}
+        else:
+            # Add bookmark
+            bookmark = Bookmark(article_id=article_id)
+            session.add(bookmark)
+            session.commit()
+            logger.info("api:bookmark:added", extra={"article_id": article_id})
+            return {"bookmarked": True, "action": "added"}
+    except Exception as e:
+        session.rollback()
+        logger.exception("api:bookmark:toggle:error")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    finally:
+        session.close()
+
+
+@app.get("/api/articles/bookmarked")
+def api_articles_bookmarked(page: int = 1, limit: int = 10):
+    """Get list of bookmarked articles."""
+    session = SessionLocal()
+    try:
+        page = max(1, int(page or 1))
+        limit = max(1, min(100, int(limit or 10)))
+        
+        # Query bookmarked articles with pagination
+        query = session.query(Article)\
+            .join(Bookmark, Article.id == Bookmark.article_id)\
+            .order_by(Bookmark.created_at.desc())
+        
+        total = query.count()
+        pages = max(1, (total + limit - 1) // limit)
+        if page > pages:
+            page = pages
+        
+        offset = (page - 1) * limit
+        arts = query.offset(offset).limit(limit).all()
+        
+        items = [_article_to_dict(a, session=session, check_bookmark=True) for a in arts]
+        
+        logger.info("api:articles:bookmarked", extra={
+            "count": len(items), "page": page, "limit": limit, "total": total
+        })
         return {"items": items, "page": page, "limit": limit, "total": total, "pages": pages}
     finally:
         session.close()

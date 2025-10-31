@@ -1,16 +1,62 @@
 import 'package:flutter/material.dart';
 import '../models/article.dart';
+import '../services/api_service.dart';
+import '../services/logger_service.dart';
 import 'package:intl/intl.dart';
 
-class ArticleCard extends StatelessWidget {
+class ArticleCard extends StatefulWidget {
   final Article article;
   final VoidCallback onTap;
+  final Function(int articleId, bool bookmarked)? onBookmarkChanged;
   
   const ArticleCard({
     super.key,
     required this.article,
     required this.onTap,
+    this.onBookmarkChanged,
   });
+  
+  @override
+  State<ArticleCard> createState() => _ArticleCardState();
+}
+
+class _ArticleCardState extends State<ArticleCard> {
+  bool? _isBookmarked;
+  bool _bookmarkLoading = false;
+  
+  @override
+  void initState() {
+    super.initState();
+    _isBookmarked = widget.article.isBookmarked;
+  }
+  
+  Future<void> _toggleBookmark() async {
+    if (_bookmarkLoading) return;
+    setState(() {
+      _bookmarkLoading = true;
+    });
+    try {
+      final result = await ApiService.toggleBookmark(widget.article.id, screenContext: 'ArticleCard');
+      final bookmarked = result['bookmarked'] as bool? ?? false;
+      setState(() {
+        _isBookmarked = bookmarked;
+        _bookmarkLoading = false;
+      });
+      if (widget.onBookmarkChanged != null) {
+        widget.onBookmarkChanged!(widget.article.id, bookmarked);
+      }
+    } catch (e) {
+      LoggerService().logError('ArticleCard', 'Toggle Bookmark', e);
+      setState(() {
+        _bookmarkLoading = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update bookmark: ${e.toString()}')),
+        );
+      }
+    }
+  }
   
   String _formatDate(String? dateStr) {
     if (dateStr == null) return '';
@@ -28,16 +74,16 @@ class ArticleCard extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       elevation: 2,
       child: InkWell(
-        onTap: onTap,
+        onTap: widget.onTap,
         borderRadius: BorderRadius.circular(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (article.imageUrl != null)
+            if (widget.article.imageUrl != null)
               ClipRRect(
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
                 child: Image.network(
-                  article.imageUrl!,
+                  widget.article.imageUrl!,
                   height: 200,
                   width: double.infinity,
                   fit: BoxFit.cover,
@@ -59,19 +105,27 @@ class ArticleCard extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          _formatDate(article.publishedAt ?? article.fetchedAt),
+                          _formatDate(widget.article.publishedAt ?? widget.article.fetchedAt),
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: Colors.grey[600],
                           ),
                         ),
                       ),
-                      if (article.source != null)
+                      if (widget.article.source != null)
                         Text(
-                          '• ${article.source}',
+                          '• ${widget.article.source}',
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: Colors.grey[600],
                           ),
                         ),
+                      IconButton(
+                        icon: Icon(
+                          _isBookmarked == true ? Icons.star : Icons.star_border,
+                          color: _isBookmarked == true ? Colors.amber : Colors.grey,
+                        ),
+                        onPressed: _bookmarkLoading ? null : _toggleBookmark,
+                        tooltip: _isBookmarked == true ? 'Remove bookmark' : 'Add bookmark',
+                      ),
                     ],
                   ),
                   const SizedBox(height: 8),
@@ -79,13 +133,13 @@ class ArticleCard extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          article.displayTitle,
+                          widget.article.displayTitle,
                           style: Theme.of(context).textTheme.titleLarge?.copyWith(
                             fontWeight: FontWeight.bold,
                           ),
                         ),
                       ),
-                      if (article.rewriteNote != null)
+                      if (widget.article.rewriteNote != null)
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
@@ -93,7 +147,7 @@ class ArticleCard extends StatelessWidget {
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
-                            article.rewriteNote!,
+                            widget.article.rewriteNote!,
                             style: TextStyle(
                               fontSize: 10,
                               color: Colors.amber.shade900,
@@ -102,10 +156,10 @@ class ArticleCard extends StatelessWidget {
                         ),
                     ],
                   ),
-                  if (article.byline != null) ...[
+                  if (widget.article.byline != null) ...[
                     const SizedBox(height: 4),
                     Text(
-                      'By ${article.byline}',
+                      'By ${widget.article.byline}',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Colors.grey[600],
                       ),
@@ -113,12 +167,12 @@ class ArticleCard extends StatelessWidget {
                   ],
                   const SizedBox(height: 12),
                   Text(
-                    article.preview,
+                    widget.article.preview,
                     style: Theme.of(context).textTheme.bodyMedium,
                     maxLines: 4,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  if (article.hasMore) ...[
+                  if (widget.article.hasMore) ...[
                     const SizedBox(height: 8),
                     Text(
                       'Read more →',

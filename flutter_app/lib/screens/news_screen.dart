@@ -23,13 +23,48 @@ class _NewsScreenState extends State<NewsScreen> {
   int _totalArticles = 0;
   
   Timer? _refreshTimer;
+  Timer? _searchDebounceTimer;
+  
+  String _searchQuery = '';
+  String _filterSource = '';
+  String _sortBy = 'date_desc';
+  List<String> _sources = [];
+  bool _showFilters = false;
+  
+  final TextEditingController _searchController = TextEditingController();
   
   @override
   void initState() {
     super.initState();
     LoggerService().logInfo('NewsScreen', 'Screen Initialized');
+    _searchController.addListener(_onSearchChanged);
+    _loadSources();
     _loadArticles();
     _startAutoRefresh();
+  }
+  
+  void _onSearchChanged() {
+    _searchDebounceTimer?.cancel();
+    _searchDebounceTimer = Timer(const Duration(milliseconds: 500), () {
+      setState(() {
+        _searchQuery = _searchController.text;
+        _currentPage = 1;
+        _loadArticles();
+      });
+    });
+  }
+  
+  Future<void> _loadSources() async {
+    try {
+      final sources = await ApiService.getArticleSources(screenContext: 'NewsScreen');
+      if (mounted) {
+        setState(() {
+          _sources = sources;
+        });
+      }
+    } catch (e) {
+      LoggerService().logError('NewsScreen', 'Load Sources', e);
+    }
   }
   
   void _startAutoRefresh() {
@@ -47,6 +82,8 @@ class _NewsScreenState extends State<NewsScreen> {
   void dispose() {
     LoggerService().logInfo('NewsScreen', 'Screen Disposed');
     _refreshTimer?.cancel();
+    _searchDebounceTimer?.cancel();
+    _searchController.dispose();
     super.dispose();
   }
   
@@ -61,7 +98,14 @@ class _NewsScreenState extends State<NewsScreen> {
     }
     
     try {
-      final response = await ApiService.getArticles(page: _currentPage, limit: 10, screenContext: 'NewsScreen');
+      final response = await ApiService.getArticles(
+        page: _currentPage,
+        limit: 10,
+        q: _searchQuery.isNotEmpty ? _searchQuery : null,
+        source: _filterSource.isNotEmpty ? _filterSource : null,
+        sortBy: _sortBy,
+        screenContext: 'NewsScreen',
+      );
       
       if (mounted) {
         final items = (response['items'] as List<dynamic>? ?? [])
@@ -125,13 +169,167 @@ class _NewsScreenState extends State<NewsScreen> {
         title: const Text('Latest Local News'),
         actions: [
           IconButton(
+            icon: Icon(_showFilters ? Icons.filter_list : Icons.filter_list_outlined),
+            onPressed: () {
+              setState(() {
+                _showFilters = !_showFilters;
+              });
+            },
+            tooltip: 'Filters',
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _refresh,
             tooltip: 'Refresh',
           ),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(56),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search articles...',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() {
+                            _searchQuery = '';
+                            _currentPage = 1;
+                          });
+                          _loadArticles();
+                        },
+                      )
+                    : null,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                filled: true,
+                fillColor: Theme.of(context).brightness == Brightness.dark
+                    ? Colors.grey[800]
+                    : Colors.grey[100],
+              ),
+            ),
+          ),
+        ),
       ),
-      body: _buildBody(),
+      body: Column(
+        children: [
+          if (_showFilters) _buildFilters(),
+          Expanded(child: _buildBody()),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildFilters() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).brightness == Brightness.dark
+            ? Colors.grey[900]
+            : Colors.grey[50],
+        border: Border(
+          bottom: BorderSide(
+            color: Colors.grey.withOpacity(0.3),
+            width: 1,
+          ),
+        ),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  value: _filterSource.isEmpty ? null : _filterSource,
+                  decoration: const InputDecoration(
+                    labelText: 'Source',
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                  items: [
+                    const DropdownMenuItem<String>(
+                      value: null,
+                      child: Text('All Sources'),
+                    ),
+                    ..._sources.map((s) => DropdownMenuItem<String>(
+                      value: s,
+                      child: Text(s),
+                    )),
+                  ],
+                  onChanged: (value) {
+                    setState(() {
+                      _filterSource = value ?? '';
+                      _currentPage = 1;
+                    });
+                    _loadArticles();
+                  },
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  value: _sortBy,
+                  decoration: const InputDecoration(
+                    labelText: 'Sort By',
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                  items: const [
+                    DropdownMenuItem<String>(
+                      value: 'date_desc',
+                      child: Text('Date (Newest)'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'date_asc',
+                      child: Text('Date (Oldest)'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'title',
+                      child: Text('Title (A-Z)'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'source',
+                      child: Text('Source (A-Z)'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() {
+                        _sortBy = value;
+                        _currentPage = 1;
+                      });
+                      _loadArticles();
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+          if (_searchQuery.isNotEmpty || _filterSource.isNotEmpty || _sortBy != 'date_desc')
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: TextButton(
+                onPressed: () {
+                  setState(() {
+                    _searchQuery = '';
+                    _filterSource = '';
+                    _sortBy = 'date_desc';
+                    _currentPage = 1;
+                  });
+                  _searchController.clear();
+                  _loadArticles();
+                },
+                child: const Text('Clear Filters'),
+              ),
+            ),
+        ],
+      ),
     );
   }
   
@@ -185,6 +383,31 @@ class _NewsScreenState extends State<NewsScreen> {
                           builder: (context) => ArticleDetailScreen(article: article),
                         ),
                       );
+                    },
+                    onBookmarkChanged: (articleId, bookmarked) {
+                      // Update article in list
+                      setState(() {
+                        _articles = _articles.map((a) => 
+                          a.id == articleId 
+                            ? Article(
+                                id: a.id,
+                                title: a.title,
+                                source: a.source,
+                                sourceUrl: a.sourceUrl,
+                                imageUrl: a.imageUrl,
+                                publishedAt: a.publishedAt,
+                                fetchedAt: a.fetchedAt,
+                                sortTs: a.sortTs,
+                                aiBody: a.aiBody,
+                                aiModel: a.aiModel,
+                                rewriteNote: a.rewriteNote,
+                                byline: a.byline,
+                                sourceTitle: a.sourceTitle,
+                                isBookmarked: bookmarked,
+                              )
+                            : a
+                        ).toList();
+                      });
                     },
                   );
                 }

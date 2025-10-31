@@ -166,9 +166,37 @@ class ApiService {
   }
   
   // Articles
-  static Future<Map<String, dynamic>> getArticles({int page = 1, int limit = 10, String? screenContext}) async {
-    final response = await _get('${Constants.articlesEndpoint}?page=$page&limit=$limit', screenContext: screenContext ?? 'NewsScreen');
+  static Future<Map<String, dynamic>> getArticles({
+    int page = 1,
+    int limit = 10,
+    String? q,
+    String? source,
+    String? sortBy,
+    String? screenContext,
+  }) async {
+    final params = <String, String>{
+      'page': page.toString(),
+      'limit': limit.toString(),
+    };
+    if (q != null && q.isNotEmpty) params['q'] = q;
+    if (source != null && source.isNotEmpty) params['source'] = source;
+    if (sortBy != null && sortBy.isNotEmpty) params['sort_by'] = sortBy;
+    
+    final queryString = params.entries.map((e) => '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}').join('&');
+    final response = await _get('${Constants.articlesEndpoint}?$queryString', screenContext: screenContext ?? 'NewsScreen');
     return response;
+  }
+  
+  // Get article sources
+  static Future<List<String>> getArticleSources({String? screenContext}) async {
+    try {
+      final response = await _get('${Constants.articlesEndpoint}/sources', screenContext: screenContext ?? 'NewsScreen');
+      final sources = response['sources'] as List<dynamic>? ?? [];
+      return sources.map((s) => s.toString()).toList();
+    } catch (e) {
+      LoggerService().logError('API', 'GET Sources', e);
+      return [];
+    }
   }
   
   // Weather
@@ -279,5 +307,25 @@ class ApiService {
   // Location
   static Future<void> updateLocation(String location, {String? screenContext}) async {
     await _post(Constants.locationEndpoint, body: {'location': location}, screenContext: screenContext ?? 'SettingsScreen');
+  }
+  
+  // Bookmarks
+  static Future<Map<String, dynamic>> toggleBookmark(int articleId, {String? screenContext}) async {
+    final response = await _post('${Constants.articlesEndpoint}/$articleId/bookmark', screenContext: screenContext ?? 'ArticleCard');
+    return response;
+  }
+  
+  static Future<Map<String, dynamic>> getBookmarkedArticles({
+    int page = 1,
+    int limit = 10,
+    String? screenContext,
+  }) async {
+    final params = <String, String>{
+      'page': page.toString(),
+      'limit': limit.toString(),
+    };
+    final queryString = params.entries.map((e) => '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}').join('&');
+    final response = await _get('${Constants.articlesEndpoint}/bookmarked?$queryString', screenContext: screenContext ?? 'NewsScreen');
+    return response;
   }
 }

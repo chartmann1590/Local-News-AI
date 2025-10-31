@@ -12,6 +12,7 @@ class Article {
   final String? rewriteNote;
   final String? byline;
   final String? sourceTitle;
+  final bool? isBookmarked;
   
   Article({
     required this.id,
@@ -27,6 +28,7 @@ class Article {
     this.rewriteNote,
     this.byline,
     this.sourceTitle,
+    this.isBookmarked,
   });
   
   factory Article.fromJson(Map<String, dynamic> json) {
@@ -44,6 +46,7 @@ class Article {
       rewriteNote: json['rewrite_note'] as String?,
       byline: json['byline'] as String?,
       sourceTitle: json['source_title'] as String?,
+      isBookmarked: json['is_bookmarked'] as bool?,
     );
   }
   

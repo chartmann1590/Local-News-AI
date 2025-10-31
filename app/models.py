@@ -97,3 +97,11 @@ class MobileLog(Base):
     file_size_bytes: Mapped[int] = mapped_column(Integer)
     sha256: Mapped[str] = mapped_column(String)
     notes: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class Bookmark(Base):
+    __tablename__ = "bookmarks"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    article_id: Mapped[int] = mapped_column(Integer, ForeignKey("articles.id"), index=True, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
