@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Article Bookmarking:** You can now bookmark articles in both the web and mobile apps. (2025-10-31)
+- **Search and Filtering:** You can now search for articles by keyword and filter by source in both the web and mobile apps. (2025-10-31)
 - **Wind Speed Unit Setting:** You can now select your preferred wind speed unit (mph or km/h) in the settings. The AI-generated weather reports will use the selected unit. (2025-10-30)
 - **Mobile Log Viewer:** A new panel in the web UI to view, filter, and manage logs uploaded from the mobile app. (2025-10-30)
 - **Location-based Time:** The web UI now displays the current date and time for the selected location. (2025-10-30)

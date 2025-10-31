@@ -9,6 +9,8 @@
 *   **🌦️ Weather Reports:** Includes a 5-day forecast, weather icons, and an embedded radar map.
 *   **🗣️ Text-to-Speech:** Listen to articles and weather reports with offline TTS (OpenTTS/Piper).
 *   **💬 AI Comments:** Engage in a conversation with the AI about each article.
+*   **⭐ Article Bookmarking:** Save your favorite articles for later reading.
+*   **🔍 Search and Filtering:** Easily find articles with keyword search and source filtering.
 *   **📱 Mobile & Web Apps:** Access your news via a web interface (PWA) or a native Android app built with Flutter.
 *   **🎨 Light/Dark Mode:** Choose your preferred theme.
 *   **⚙️ Highly Configurable:** Customize schedules, news sources, and AI models.
