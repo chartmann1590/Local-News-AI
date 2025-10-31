@@ -16,3 +16,5 @@ tmp_*.txt
 # Documentation
 claude.md
 GEMINI.md
+gemini.md
+*[Gg]emini*.md
