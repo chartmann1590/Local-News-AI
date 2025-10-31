@@ -5,8 +5,8 @@ import os
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response
+from fastapi import FastAPI, Request, UploadFile, File, Form
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -15,8 +15,8 @@ import time
 
 from .database import init_db, SessionLocal
 from sqlalchemy import func, case
-from .models import Article, WeatherReport, AppConfig, AppSettings, TTSSettings, ChatMessage
-from .scheduler import start_scheduler, run_harvest_once
+from .models import Article, WeatherReport, AppConfig, AppSettings, TTSSettings, ChatMessage, MobileLog
+from .scheduler import start_scheduler, run_harvest_once, restart_scheduler
 from . import maintenance
 import threading
 from .geo import resolve_location, set_location, auto_set_location
@@ -26,6 +26,57 @@ from urllib.parse import urlparse, urlunparse
 from .tts import TTSClient, DEFAULT_TTS_BASE
 from .ai import generate_article_comment
 from collections import defaultdict, deque
+import uuid
+import hashlib
+
+MAX_LOG_UPLOAD_BYTES = int(os.getenv("MAX_LOG_UPLOAD_BYTES", str(5 * 1024 * 1024)))  # 5MB
+LOGS_PER_MIN_LIMIT = int(os.getenv("LOGS_RATE_LIMIT_PER_MIN", "10"))
+
+_LOGS_RL_LOCK = threading.Lock()
+_LOGS_RL: dict[str, deque] = defaultdict(deque)  # key: ip
+
+def _logs_rate_limited(ip: str) -> bool:
+    try:
+        now = time.time()
+        key = ip or "-"
+        with _LOGS_RL_LOCK:
+            q = _LOGS_RL[key]
+            while q and (now - q[0]) > 60.0:
+                q.popleft()
+            if len(q) >= LOGS_PER_MIN_LIMIT:
+                return True
+            q.append(now)
+    except Exception:
+        return False
+    return False
+
+def _ensure_logs_dir() -> str:
+    base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "logs"))
+    try:
+        os.makedirs(base, exist_ok=True)
+    except Exception:
+        pass
+    return base
+
+def _save_log_file(fileobj, out_path: str) -> tuple[int, str]:
+    sha = hashlib.sha256()
+    total = 0
+    with open(out_path, 'wb') as f:
+        while True:
+            chunk = fileobj.read(64 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_LOG_UPLOAD_BYTES:
+                raise ValueError("file_too_large")
+            # allow only text-like content (basic heuristic)
+            try:
+                _ = chunk.decode('utf-8', errors='ignore')
+            except Exception:
+                raise ValueError("invalid_content")
+            sha.update(chunk)
+            f.write(chunk)
+    return total, sha.hexdigest()
 
 
 # ----- Logging setup (container stdout) -----
@@ -427,6 +478,195 @@ def api_article_chat(article_id: int, payload: dict, request: Request):
     return {"author": author_name, "reply": reply}
 
 
+# ----- Logs endpoints -----
+
+@app.post("/api/logs/upload")
+async def api_logs_upload(
+    request: Request,
+    deviceId: str = Form("") ,
+    platform: str = Form("android"),
+    appVersion: str = Form(""),
+    buildNumber: str = Form(""),
+    notes: str | None = Form(None),
+    log: UploadFile = File(...),
+):
+    ip = request.client.host if request.client else "-"
+    if _logs_rate_limited(ip):
+        return JSONResponse(status_code=429, content={"error": "rate_limited"})
+    # Guard filename and content type
+    fname = (log.filename or "app.log").lower()
+    if any(fname.endswith(ext) for ext in [".exe", ".bin", ".zip", ".apk"]):
+        return JSONResponse(status_code=400, content={"error": "invalid_file_type"})
+    # Storage path
+    base = _ensure_logs_dir()
+    today = datetime.utcnow()
+    day_dir = os.path.join(base, f"{today.year:04d}", f"{today.month:02d}", f"{today.day:02d}")
+    os.makedirs(day_dir, exist_ok=True)
+    log_id = str(uuid.uuid4())
+    out_path = os.path.join(day_dir, f"{log_id}.log")
+    try:
+        size, digest = _save_log_file(log.file, out_path)
+    except ValueError as ve:
+        try:
+            if os.path.exists(out_path):
+                os.remove(out_path)
+        except Exception:
+            pass
+        if str(ve) == "file_too_large":
+            return JSONResponse(status_code=413, content={"error": "file_too_large"})
+        return JSONResponse(status_code=400, content={"error": "invalid_content"})
+    except Exception as e:
+        try:
+            if os.path.exists(out_path):
+                os.remove(out_path)
+        except Exception:
+            pass
+        logger.exception("logs_upload_failed")
+        return JSONResponse(status_code=500, content={"error": "upload_failed"})
+
+    # Persist metadata
+    rel_path = os.path.relpath(out_path, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+    session = SessionLocal()
+    try:
+        ml = MobileLog(
+            id=log_id,
+            device_id=(deviceId or ""),
+            platform=(platform or "android")[:16],
+            app_version=(appVersion or "")[:64],
+            build_number=(buildNumber or "")[:32],
+            uploaded_at=datetime.utcnow(),
+            file_path=rel_path.replace("\\", "/"),
+            file_size_bytes=int(size),
+            sha256=digest,
+            notes=(notes or None),
+        )
+        session.add(ml)
+        session.commit()
+    finally:
+        session.close()
+
+    return {"id": log_id, "uploadedAt": today.isoformat()}
+
+
+@app.get("/api/logs")
+def api_logs_list(q: str | None = None, platform: str | None = None, deviceId: str | None = None, after: str | None = None, before: str | None = None, page: int = 1, pageSize: int = 20):
+    session = SessionLocal()
+    try:
+        page = max(1, int(page or 1))
+        pageSize = max(1, min(100, int(pageSize or 20)))
+        qry = session.query(MobileLog)
+        if platform:
+            qry = qry.filter(MobileLog.platform == platform)
+        if deviceId:
+            qry = qry.filter(MobileLog.device_id == deviceId)
+        if after:
+            try:
+                dt = datetime.fromisoformat(after)
+                qry = qry.filter(MobileLog.uploaded_at >= dt)
+            except Exception:
+                pass
+        if before:
+            try:
+                dt = datetime.fromisoformat(before)
+                qry = qry.filter(MobileLog.uploaded_at <= dt)
+            except Exception:
+                pass
+        # Simple q across id/app_version/notes
+        if q:
+            like = f"%{q}%"
+            qry = qry.filter((MobileLog.id.like(like)) | (MobileLog.app_version.like(like)) | (MobileLog.notes.like(like)))
+        total = qry.count()
+        items = (
+            qry.order_by(MobileLog.uploaded_at.desc())
+            .offset((page - 1) * pageSize)
+            .limit(pageSize)
+            .all()
+        )
+        out = []
+        for m in items:
+            out.append({
+                "id": m.id,
+                "device_id": m.device_id,
+                "platform": m.platform,
+                "app_version": m.app_version,
+                "build_number": m.build_number,
+                "uploaded_at": m.uploaded_at.isoformat() if m.uploaded_at else None,
+                "file_size_bytes": m.file_size_bytes,
+            })
+        return {"items": out, "page": page, "pageSize": pageSize, "total": total}
+    finally:
+        session.close()
+
+
+@app.get("/api/logs/{log_id}")
+def api_logs_detail(log_id: str):
+    session = SessionLocal()
+    try:
+        m = session.query(MobileLog).filter_by(id=log_id).one_or_none()
+        if not m:
+            return JSONResponse(status_code=404, content={"error": "not_found"})
+        # Build preview
+        abs_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        abs_path = os.path.join(abs_root, m.file_path)
+        preview = ""
+        try:
+            with open(abs_path, 'rb') as f:
+                preview = f.read(256 * 1024).decode('utf-8', errors='replace')
+        except Exception:
+            preview = ""
+        return {
+            "id": m.id,
+            "device_id": m.device_id,
+            "platform": m.platform,
+            "app_version": m.app_version,
+            "build_number": m.build_number,
+            "uploaded_at": m.uploaded_at.isoformat() if m.uploaded_at else None,
+            "file_size_bytes": m.file_size_bytes,
+            "sha256": m.sha256,
+            "notes": m.notes,
+            "preview": preview,
+        }
+    finally:
+        session.close()
+
+
+@app.get("/api/logs/{log_id}/download")
+def api_logs_download(log_id: str):
+    session = SessionLocal()
+    try:
+        m = session.query(MobileLog).filter_by(id=log_id).one_or_none()
+        if not m:
+            return JSONResponse(status_code=404, content={"error": "not_found"})
+        abs_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        abs_path = os.path.join(abs_root, m.file_path)
+        if not os.path.exists(abs_path):
+            return JSONResponse(status_code=404, content={"error": "file_missing"})
+        return FileResponse(abs_path, media_type='text/plain', filename=f"{log_id}.log")
+    finally:
+        session.close()
+
+
+@app.delete("/api/logs/{log_id}")
+def api_logs_delete(log_id: str):
+    session = SessionLocal()
+    try:
+        m = session.query(MobileLog).filter_by(id=log_id).one_or_none()
+        if not m:
+            return JSONResponse(status_code=404, content={"error": "not_found"})
+        abs_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        abs_path = os.path.join(abs_root, m.file_path)
+        try:
+            if os.path.exists(abs_path):
+                os.remove(abs_path)
+        except Exception:
+            logger.exception("logs_delete_file_failed")
+        session.delete(m)
+        session.commit()
+        return {"status": "deleted"}
+    finally:
+        session.close()
+
+
 @app.get("/api/weather")
 def api_weather():
     session = SessionLocal()
@@ -463,10 +703,28 @@ def api_config():
     session = SessionLocal()
     try:
         cfg = session.query(AppConfig).filter_by(id=1).one_or_none()
+        tz_name = cfg.timezone if cfg and cfg.timezone else os.environ.get("TZ", "America/New_York")
+        # Get current time in location's timezone
+        try:
+            import pytz
+            tz = pytz.timezone(tz_name)
+            local_time = datetime.now(tz)
+            current_datetime = local_time.isoformat()
+            current_date = local_time.strftime("%Y-%m-%d")
+            current_time = local_time.strftime("%H:%M:%S")
+        except Exception:
+            # Fallback to UTC if timezone fails
+            local_time = datetime.now(timezone.utc)
+            current_datetime = local_time.isoformat()
+            current_date = local_time.strftime("%Y-%m-%d")
+            current_time = local_time.strftime("%H:%M:%S")
         data = {
             "location": (cfg.location_name if cfg else None),
-            "timezone": (cfg.timezone if cfg else os.environ.get("TZ", "America/New_York")),
+            "timezone": tz_name,
             "min_articles": int(os.environ.get("MIN_ARTICLES_PER_RUN", "10")),
+            "current_datetime": current_datetime,
+            "current_date": current_date,
+            "current_time": current_time,
         }
         logger.info("api:config", extra={"location": data["location"], "timezone": data["timezone"], "min_articles": data["min_articles"]})
         return data
@@ -496,6 +754,11 @@ async def api_set_location_new(payload: dict):
     if not name or not isinstance(name, str) or len(name.strip()) < 2:
         return JSONResponse(status_code=400, content={"error": "location string required"})
     cfg = set_location(name.strip())
+    # Restart scheduler to use new timezone
+    try:
+        restart_scheduler()
+    except Exception:
+        logger.exception("scheduler_restart_failed_after_location_change")
     def _bg_refresh():
         try:
             session = SessionLocal()
@@ -522,6 +785,11 @@ async def api_set_location_new(payload: dict):
 @app.post("/api/location/auto")
 def api_auto_location():
     cfg = auto_set_location()
+    # Restart scheduler to use new timezone
+    try:
+        restart_scheduler()
+    except Exception:
+        logger.exception("scheduler_restart_failed_after_auto_location")
     def _bg_refresh():
         try:
             session = SessionLocal()

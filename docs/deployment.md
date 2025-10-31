@@ -36,10 +36,10 @@ For auto-start on boot, use your host’s service manager (e.g., a systemd unit 
 ## Frontend assets and caching
 
 - The frontend uses compiled Tailwind CSS (darkMode: 'class'). Assets are built during the image build and served from `/static`.
-- A simple service worker provides offline caching. If clients don’t see new styles immediately, they may be using cached assets.
-  - Ask users to hard refresh.
-  - If needed, bump the cache name in `web/public/sw.js` (e.g., update `CACHE_NAME`) and rebuild.
-  - PWAs may delay updates until all tabs are closed; a hard refresh or closing/reopening the app ensures the new SW takes control.
+- A simple service worker (`web/public/sw.js`) provides offline caching of assets. This can sometimes lead to clients not seeing new styles immediately after a deployment.
+- To force a refresh, users can perform a hard refresh in their browser (e.g., Ctrl+Shift+R or Cmd+Shift+R).
+- If a hard refresh is not sufficient, the service worker may need to be updated. You can force this by bumping the `CACHE_NAME` in `web/public/sw.js` and rebuilding the `app` image.
+- Progressive Web Apps (PWAs) may delay updates until all tabs of the app are closed. Closing and reopening the app will ensure the new service worker takes control.
 
 ## Mobile PWA behavior
 

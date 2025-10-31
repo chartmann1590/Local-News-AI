@@ -367,7 +367,41 @@ function ArticleCard({ a, tts }) {
 function LocationBar({ config, onChange }) {
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState(config?.location || '')
+  const [currentDateTime, setCurrentDateTime] = useState(null)
   useEffect(() => setValue(config?.location || ''), [config?.location])
+  
+  // Update current date/time every second
+  useEffect(() => {
+    if (!config?.current_datetime || !config?.timezone) return
+    const baseTime = new Date(config.current_datetime).getTime()
+    const baseClientTime = Date.now()
+    function updateTime() {
+      try {
+        // Calculate elapsed time since we got the server time
+        const elapsed = Date.now() - baseClientTime
+        const targetTime = baseTime + elapsed
+        
+        // Format in the location's timezone
+        const date = new Date(targetTime)
+        setCurrentDateTime(date.toLocaleString('en-US', { 
+          weekday: 'long', 
+          year: 'numeric', 
+          month: 'long', 
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          timeZone: config.timezone
+        }))
+      } catch (e) {
+        setCurrentDateTime(null)
+      }
+    }
+    updateTime()
+    const interval = setInterval(updateTime, 1000)
+    return () => clearInterval(interval)
+  }, [config?.current_datetime, config?.timezone])
+  
   async function submit(e){
     e.preventDefault()
     const name = value.trim()
@@ -378,7 +412,18 @@ function LocationBar({ config, onChange }) {
   return (
     <div className="max-w-[1100px] mx-auto px-4 mt-4">
       {!editing ? (
-        <div className="text-sm text-slate-600 dark:text-slate-300">Location: <span className="font-medium">{config?.location || 'Resolving…'}</span> <button className="ml-3 text-blue-600 hover:underline" onClick={() => setEditing(true)}>Change</button></div>
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="text-sm text-slate-600 dark:text-slate-300">
+            Location: <span className="font-medium">{config?.location || 'Resolving…'}</span> 
+            <button className="ml-3 text-blue-600 hover:underline" onClick={() => setEditing(true)}>Change</button>
+          </div>
+          {currentDateTime && (
+            <div className="text-sm text-slate-600 dark:text-slate-300">
+              <span className="font-medium">{currentDateTime}</span>
+              {config?.timezone && <span className="ml-2 text-xs text-slate-500">({config.timezone})</span>}
+            </div>
+          )}
+        </div>
       ) : (
         <form onSubmit={submit} className="flex items-center gap-2">
           <input value={value} onChange={e=>setValue(e.target.value)} placeholder="City, State or ZIP" className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 flex-1"/>
@@ -394,6 +439,9 @@ export default function App() {
   const [config, setConfig] = useState(null)
   const [weather, setWeather] = useState(null)
   const [articles, setArticles] = useState([])
+  const [logs, setLogs] = useState({ items: [], page: 1, pageSize: 20, total: 0 })
+  const [logsQuery, setLogsQuery] = useState({ q: '', platform: '', deviceId: '' })
+  const [selectedLog, setSelectedLog] = useState(null)
   const [tts, setTts] = useState(null)
   const [page, setPage] = useState(1)
   const [pages, setPages] = useState(1)
@@ -402,6 +450,7 @@ export default function App() {
   const [status, setStatus] = useState(null)
   const [showSettings, setShowSettings] = useState(false)
   const [showSplash, setShowSplash] = useState(true)
+  const [showLogsPanel, setShowLogsPanel] = useState(false)
 
   async function loadAll() {
     const t0 = performance.now()
@@ -483,6 +532,26 @@ export default function App() {
     }
   }
 
+  async function loadLogs(p = 1) {
+    const params = new URLSearchParams()
+    params.set('page', String(p))
+    params.set('pageSize', '20')
+    if (logsQuery.q) params.set('q', logsQuery.q)
+    if (logsQuery.platform) params.set('platform', logsQuery.platform)
+    if (logsQuery.deviceId) params.set('deviceId', logsQuery.deviceId)
+    const res = await fetch('/api/logs?' + params.toString())
+    if (!res.ok) throw new Error('logs load failed')
+    const data = await res.json()
+    setLogs(data)
+  }
+
+  useEffect(() => {
+    if (showLogsPanel) {
+      loadLogs(1).catch(()=>{})
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showLogsPanel])
+
   async function changeLocation(name) {
     try {
       await fetch('/api/location', {
@@ -506,7 +575,12 @@ export default function App() {
       <SplashScreen show={showSplash} />
       <Header location={config?.location} running={running} onRunNow={onRunNow} onOpenSettings={() => setShowSettings(true)} />
       <div className="max-w-[1100px] mx-auto px-4 mt-3">
-        <StatusBar status={status} />
+        <StatusBar status={status} timezone={config?.timezone} />
+      </div>
+      <div className="max-w-[1100px] mx-auto px-4 mt-2 flex items-center gap-2">
+        <button onClick={()=>setShowLogsPanel(v=>!v)} className="px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm hover:bg-slate-50 dark:hover:bg-slate-800">
+          {showLogsPanel ? 'Hide Logs' : 'Show Logs'}
+        </button>
       </div>
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} reloadAll={async () => { await loadAll(); await loadStatus(); }} />}
       <LocationBar config={config} onChange={changeLocation} />
@@ -539,6 +613,73 @@ export default function App() {
             ) : (
               <div className="text-slate-500">No articles yet. Use Run Now to start.</div>
             )}
+            {showLogsPanel && (
+              <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200/60 dark:border-slate-700/60 overflow-hidden">
+                <div className="p-5 border-b border-slate-200/60 dark:border-slate-700/60 flex items-center gap-2">
+                  <div className="text-2xl">📋</div>
+                  <div className="font-semibold">Mobile Logs</div>
+                  <div className="ml-auto flex items-center gap-2">
+                    <input value={logsQuery.q} onChange={e=>setLogsQuery(q=>({...q, q: e.target.value}))} placeholder="Search" className="px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                    <select value={logsQuery.platform} onChange={e=>setLogsQuery(q=>({...q, platform: e.target.value}))} className="px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800">
+                      <option value="">All</option>
+                      <option value="android">Android</option>
+                      <option value="ios">iOS</option>
+                    </select>
+                    <input value={logsQuery.deviceId} onChange={e=>setLogsQuery(q=>({...q, deviceId: e.target.value}))} placeholder="Device ID" className="px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                    <button onClick={()=>loadLogs(1)} className="px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700">Filter</button>
+                  </div>
+                </div>
+                <div className="grid md:grid-cols-2">
+                  <div className="overflow-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-slate-50 dark:bg-slate-900/40">
+                        <tr>
+                          <th className="text-left px-3 py-2">Uploaded</th>
+                          <th className="text-left px-3 py-2">Device</th>
+                          <th className="text-left px-3 py-2">Platform</th>
+                          <th className="text-left px-3 py-2">Version</th>
+                          <th className="text-left px-3 py-2">Size</th>
+                          <th className="text-left px-3 py-2">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {logs.items.map(it => (
+                          <tr key={it.id} className={`border-t border-slate-200/60 dark:border-slate-700/60 ${selectedLog?.id===it.id?'bg-blue-50/40 dark:bg-blue-900/20':''}`}>
+                            <td className="px-3 py-2">{it.uploaded_at ? new Date(it.uploaded_at).toLocaleString() : '-'}</td>
+                            <td className="px-3 py-2 font-mono text-xs">{it.device_id || '-'}</td>
+                            <td className="px-3 py-2">{it.platform}</td>
+                            <td className="px-3 py-2">{it.app_version || '-'}</td>
+                            <td className="px-3 py-2">{Math.round((it.file_size_bytes||0)/1024)} KB</td>
+                            <td className="px-3 py-2 space-x-2">
+                              <button onClick={async()=>{ const r = await fetch(`/api/logs/${it.id}`); if(r.ok){ setSelectedLog(await r.json()) } }} className="text-blue-600 hover:underline">View</button>
+                              <a href={`/api/logs/${it.id}/download`} className="text-blue-600 hover:underline">Download</a>
+                              <button onClick={async()=>{ if(!confirm('Delete this log?')) return; await fetch(`/api/logs/${it.id}`, { method:'DELETE' }); await loadLogs(logs.page); if(selectedLog?.id===it.id) setSelectedLog(null) }} className="text-red-600 hover:underline">Delete</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="flex items-center justify-between px-3 py-2 border-t border-slate-200/60 dark:border-slate-700/60">
+                      <div className="text-xs text-slate-500">Page {logs.page} of {Math.max(1, Math.ceil((logs.total||0)/(logs.pageSize||20)))}</div>
+                      <div className="flex items-center gap-2">
+                        <button disabled={logs.page<=1} onClick={()=>loadLogs((logs.page||1)-1)} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 ${logs.page<=1 ? 'opacity-50' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'}`}>Prev</button>
+                        <button disabled={(logs.page||1) >= Math.max(1, Math.ceil((logs.total||0)/(logs.pageSize||20)))} onClick={()=>loadLogs((logs.page||1)+1)} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 ${((logs.page||1) >= Math.max(1, Math.ceil((logs.total||0)/(logs.pageSize||20)))) ? 'opacity-50' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'}`}>Next</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="border-l border-slate-200/60 dark:border-slate-700/60 p-4 min-h-[300px]">
+                    {!selectedLog ? (
+                      <div className="text-slate-500 text-sm">Select a log to preview.</div>
+                    ) : (
+                      <div className="h-full flex flex-col">
+                        <div className="text-sm mb-2">Log <span className="font-mono">{selectedLog.id}</span> · {selectedLog.app_version || '-'} · {selectedLog.platform}</div>
+                        <pre className="flex-1 overflow-auto whitespace-pre-wrap text-xs bg-slate-50 dark:bg-slate-900/40 p-3 rounded-md border border-slate-200/60 dark:border-slate-700/60">{selectedLog.preview || ''}</pre>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
         </div>
       </main>
@@ -550,7 +691,7 @@ export default function App() {
   )
 }
 
-function StatusBar({ status }) {
+function StatusBar({ status, timezone }) {
   if (!status) return null
   const running = !!status.running
   const phase = status.phase
@@ -559,6 +700,32 @@ function StatusBar({ status }) {
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0
   const detail = status.detail || ''
   const nextRuns = (status.next_runs || []).slice(0, 3)
+
+  // Format date/time in location's timezone
+  const formatDateTime = (dateStr, includeDate = false) => {
+    if (!dateStr) return '-'
+    try {
+      // Parse the ISO string - it may already be in the location timezone or UTC
+      const date = new Date(dateStr)
+      const options = {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        ...(includeDate && {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+        }),
+      }
+      // Always format in the location's timezone if provided
+      if (timezone) {
+        options.timeZone = timezone
+      }
+      return date.toLocaleString('en-US', options)
+    } catch (e) {
+      return dateStr
+    }
+  }
 
   return (
     <div className="rounded-lg border border-slate-200/60 dark:border-slate-700/60 bg-white dark:bg-slate-800 p-3 text-sm">
@@ -600,12 +767,12 @@ function StatusBar({ status }) {
               <span className="text-slate-500">Not scheduled</span>
             ) : nextRuns.map((j, i) => (
               <span key={i} className="px-2 py-1 rounded-md bg-slate-100 dark:bg-slate-700/60 text-slate-700 dark:text-slate-200">
-                {new Date(j.next_run).toLocaleString()} ({j.id.replace('harvest_', '')})
+                {formatDateTime(j.next_run, true)} ({j.id.replace('harvest_', '')})
               </span>
             ))}
           </div>
-          <span className="ml-auto text-slate-500">Started: {status.started_at ? new Date(status.started_at).toLocaleTimeString() : '-'}</span>
-          <span className="text-slate-500">Finished: {status.finished_at ? new Date(status.finished_at).toLocaleTimeString() : '-'}</span>
+          <span className="ml-auto text-slate-500">Started: {formatDateTime(status.started_at)}</span>
+          <span className="text-slate-500">Finished: {formatDateTime(status.finished_at)}</span>
         </div>
       )}
     </div>

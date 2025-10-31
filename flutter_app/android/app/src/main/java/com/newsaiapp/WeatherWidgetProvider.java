@@ -36,8 +36,10 @@ public class WeatherWidgetProvider extends AppWidgetProvider {
         // Show a lightweight loading state immediately and enqueue async update
         for (int appWidgetId : appWidgetIds) {
             RemoteViews loadingViews = new RemoteViews(context.getPackageName(), R.layout.weather_widget_layout);
+            loadingViews.setTextViewText(R.id.location_text, "");
             loadingViews.setTextViewText(R.id.current_weather, "Loading…");
             loadingViews.setViewVisibility(R.id.forecast_container, android.view.View.GONE);
+            loadingViews.setViewVisibility(R.id.radar_link, android.view.View.GONE);
 
             // Refresh and open app buttons wiring (same as final view)
             Intent refreshIntent = new Intent(context, WeatherWidgetProvider.class);
@@ -124,6 +126,9 @@ class WeatherData {
     Double latitude;
     Double longitude;
     List<ForecastItem> dailyForecast;
+    String currentTemp;
+    String currentCondition;
+    Integer currentWeatherCode;
 }
 
 class ForecastItem {

@@ -4,6 +4,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 import threading
 from typing import Any, Dict, List, Optional
+import pytz
 
 
 @dataclass
@@ -27,8 +28,24 @@ class Progress:
         self._lock = threading.Lock()
         self._state = RunStatus()
 
-    def _now(self) -> str:
+    def _now(self, tz: str | None = None) -> str:
+        """Get current time as ISO string. If tz is provided, use that timezone, otherwise UTC."""
+        if tz:
+            try:
+                tz_obj = pytz.timezone(tz)
+                return datetime.now(tz_obj).isoformat()
+            except Exception:
+                pass
         return datetime.utcnow().isoformat()
+    
+    def _get_timezone(self) -> str | None:
+        """Get the configured location timezone."""
+        try:
+            from .geo import resolve_location
+            cfg = resolve_location()
+            return cfg.timezone if cfg and cfg.timezone else None
+        except Exception:
+            return None
 
     def reset(self) -> None:
         with self._lock:
@@ -36,7 +53,8 @@ class Progress:
 
     def start(self) -> None:
         with self._lock:
-            self._state = RunStatus(running=True, started_at=self._now())
+            tz = self._get_timezone()
+            self._state = RunStatus(running=True, started_at=self._now(tz))
 
     def phase(self, name: str, detail: Optional[str] = None) -> None:
         with self._lock:
@@ -61,7 +79,8 @@ class Progress:
     def finish(self, error: Optional[str] = None) -> None:
         with self._lock:
             self._state.running = False
-            self._state.finished_at = self._now()
+            tz = self._get_timezone()
+            self._state.finished_at = self._now(tz)
             if error:
                 self._state.error = error
             # Clear current item so UI doesn't show stale info

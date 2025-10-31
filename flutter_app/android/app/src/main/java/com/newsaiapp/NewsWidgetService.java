@@ -57,12 +57,11 @@ class NewsRemoteViewsFactory implements RemoteViewsService.RemoteViewsFactory {
                 return;
             }
             
-            // Build base URL
-            String baseUrl = serverIp;
-            if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
-                baseUrl = "http://" + baseUrl;
+            // Build base URL robustly (handle full URLs with or without port)
+            String baseUrl = normalizeBaseUrl(serverIp, serverPort);
+            if (baseUrl.isEmpty()) {
+                return;
             }
-            baseUrl = baseUrl + ":" + serverPort;
             
             // Fetch articles
             String urlString = baseUrl + "/api/articles?page=1&limit=10";
@@ -92,7 +91,12 @@ class NewsRemoteViewsFactory implements RemoteViewsService.RemoteViewsFactory {
                         newsItem.id = item.optInt("id", 0);
                         newsItem.title = item.optString("title", 
                             item.optString("source_title", "Untitled"));
-                        newsItem.source = item.optString("source", "");
+                        // Prefer source_title, then source; sanitize literal "null"
+                        String rawSource = item.optString("source_title", item.optString("source", ""));
+                        if (rawSource == null || rawSource.equalsIgnoreCase("null")) {
+                            rawSource = "";
+                        }
+                        newsItem.source = rawSource;
                         newsItem.imageUrl = item.optString("image_url", null);
                         newsItem.publishedAt = item.optString("published_at", 
                             item.optString("fetched_at", ""));
@@ -103,6 +107,31 @@ class NewsRemoteViewsFactory implements RemoteViewsService.RemoteViewsFactory {
             conn.disconnect();
         } catch (Exception e) {
             e.printStackTrace();
+        }
+    }
+
+    private String normalizeBaseUrl(String serverIp, String serverPort) {
+        String url = serverIp == null ? "" : serverIp.trim();
+        if (url.isEmpty()) return "";
+        boolean hasScheme = url.startsWith("http://") || url.startsWith("https://");
+        if (!hasScheme) {
+            url = "http://" + url;
+        }
+        try {
+            java.net.URI uri = java.net.URI.create(url);
+            if (uri.getPort() != -1) {
+                return url;
+            }
+            if (serverPort != null && !serverPort.isEmpty()) {
+                String scheme = uri.getScheme();
+                String host = uri.getHost();
+                String path = uri.getRawPath();
+                if (path == null) path = "";
+                return scheme + "://" + host + ":" + serverPort + path;
+            }
+            return url;
+        } catch (Exception e) {
+            return url;
         }
     }
 

@@ -82,3 +82,17 @@ class ChatMessage(Base):
     role: Mapped[str] = mapped_column(String(10))  # 'user' or 'ai'
     content: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MobileLog(Base):
+    __tablename__ = "mobile_logs"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    device_id: Mapped[str] = mapped_column(String, index=True)
+    platform: Mapped[str] = mapped_column(String, index=True)
+    app_version: Mapped[str] = mapped_column(String)
+    build_number: Mapped[str] = mapped_column(String)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    file_path: Mapped[str] = mapped_column(String)
+    file_size_bytes: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String)
+    notes: Mapped[str | None] = mapped_column(String, nullable=True)

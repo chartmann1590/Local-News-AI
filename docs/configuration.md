@@ -15,6 +15,8 @@ Set these in `docker-compose.yml` (or an `.env` file referenced by Compose):
 - `FEED_EXTRA_URLS` — Comma-separated RSS feed URLs to include in harvesting.
 - `LOG_LEVEL` — Logging level (`INFO`, `DEBUG`, etc.).
 - `CHAT_RATE_LIMIT_PER_MIN` — Per-IP, per-article chat limit per minute (default `10`). Excess requests return HTTP `429`.
+- `MAX_LOG_UPLOAD_BYTES` — Maximum size of log uploads in bytes (default `5242880`, which is 5MB).
+- `LOGS_RATE_LIMIT_PER_MIN` — Per-IP limit for log uploads per minute (default `10`).
 
 Data volume:
 

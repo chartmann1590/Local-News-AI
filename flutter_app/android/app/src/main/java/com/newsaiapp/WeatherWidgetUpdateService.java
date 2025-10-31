@@ -58,61 +58,104 @@ public class WeatherWidgetUpdateService extends JobIntentService {
         Context context = this;
         RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.weather_widget_layout);
 
-        WeatherData data = fetchWeatherData(context);
-
-        if (data == null) {
-            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            String serverIp = prefs.getString(PREF_SERVER_IP, null);
-            if (serverIp == null || serverIp.isEmpty()) {
-                views.setTextViewText(R.id.current_weather, "Open app to configure server");
-            } else {
-                views.setTextViewText(R.id.current_weather, "Weather data unavailable");
-            }
+        try {
+            // Initialize with default values
+            views.setTextViewText(R.id.location_text, "");
+            views.setTextViewText(R.id.current_weather, "");
             views.setViewVisibility(R.id.forecast_container, android.view.View.GONE);
             views.setViewVisibility(R.id.radar_link, android.view.View.GONE);
-        } else {
-            if (data.location != null) {
-                views.setTextViewText(R.id.location_text, data.location);
-            }
-            if (data.report != null && !data.report.isEmpty()) {
-                String currentInfo = data.report.length() > 100
-                    ? data.report.substring(0, 100) + "..."
-                    : data.report;
-                views.setTextViewText(R.id.current_weather, currentInfo);
-            }
 
-            if (data.dailyForecast != null && !data.dailyForecast.isEmpty()) {
-                views.setViewVisibility(R.id.forecast_container, android.view.View.VISIBLE);
-                views.removeAllViews(R.id.forecast_container);
+            WeatherData data = fetchWeatherData(context);
 
-                int maxItems = Math.min(5, data.dailyForecast.size());
-                for (int i = 0; i < maxItems; i++) {
-                    ForecastItem item = data.dailyForecast.get(i);
-                    RemoteViews itemView = new RemoteViews(context.getPackageName(), R.layout.weather_widget_forecast_item);
-                    try {
-                        SimpleDateFormat inputFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault());
-                        SimpleDateFormat outputFormat = new SimpleDateFormat("EEE M/d", Locale.getDefault());
-                        Date date = inputFormat.parse(item.date);
-                        itemView.setTextViewText(R.id.forecast_date, outputFormat.format(date));
-                    } catch (Exception e) {
-                        itemView.setTextViewText(R.id.forecast_date, item.date);
-                    }
-                    itemView.setTextViewText(R.id.forecast_icon, item.icon);
-                    itemView.setTextViewText(R.id.forecast_high, "H:" + item.maxTemp + "°");
-                    itemView.setTextViewText(R.id.forecast_low, "L:" + item.minTemp + "°");
-                    views.addView(R.id.forecast_container, itemView);
+            if (data == null) {
+                SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                String serverIp = prefs.getString(PREF_SERVER_IP, null);
+                if (serverIp == null || serverIp.isEmpty()) {
+                    views.setTextViewText(R.id.current_weather, "Configure server in app");
+                } else {
+                    views.setTextViewText(R.id.current_weather, "Unable to load weather");
                 }
             } else {
-                views.setViewVisibility(R.id.forecast_container, android.view.View.GONE);
-            }
+                if (data.location != null) {
+                    views.setTextViewText(R.id.location_text, data.location);
+                }
+                
+                // Build current weather display
+                StringBuilder currentInfo = new StringBuilder();
+                
+                // If we have current weather data, show it
+                if (data.currentTemp != null && !data.currentTemp.isEmpty()) {
+                    String tempStr = data.currentTemp;
+                    // Remove decimal if it's .0
+                    if (tempStr.endsWith(".0")) {
+                        tempStr = tempStr.substring(0, tempStr.length() - 2);
+                    }
+                    currentInfo.append(data.currentCondition != null ? data.currentCondition + " " : "");
+                    currentInfo.append(tempStr).append("°");
+                    
+                    // Optionally append the report if it exists (first sentence or first 50 chars)
+                    if (data.report != null && !data.report.isEmpty()) {
+                        String reportText = data.report.trim();
+                        // Try to get first sentence
+                        int periodIndex = reportText.indexOf('.');
+                        int commaIndex = reportText.indexOf(',');
+                        int cutoffIndex = Math.min(
+                            periodIndex > 0 ? periodIndex : Integer.MAX_VALUE,
+                            commaIndex > 0 ? commaIndex : Integer.MAX_VALUE
+                        );
+                        if (cutoffIndex < Integer.MAX_VALUE && cutoffIndex < 80) {
+                            currentInfo.append("\n").append(reportText.substring(0, Math.min(cutoffIndex + 1, 80)));
+                        } else if (reportText.length() > 0) {
+                            currentInfo.append("\n").append(reportText.substring(0, Math.min(50, reportText.length())));
+                        }
+                    }
+                } else if (data.report != null && !data.report.isEmpty()) {
+                    // Fallback to report if no current weather data
+                    String reportText = data.report;
+                    if (reportText.length() > 100) {
+                        reportText = reportText.substring(0, 100) + "...";
+                    }
+                    currentInfo.append(reportText);
+                }
+                
+                if (currentInfo.length() > 0) {
+                    views.setTextViewText(R.id.current_weather, currentInfo.toString());
+                } else {
+                    views.setTextViewText(R.id.current_weather, "Weather data unavailable");
+                }
 
-            if (data.latitude != null && data.longitude != null) {
-                views.setViewVisibility(R.id.radar_link, android.view.View.VISIBLE);
-                views.setTextViewText(R.id.radar_link, "View Radar Map →");
-            } else {
-                views.setViewVisibility(R.id.radar_link, android.view.View.GONE);
+                if (data.dailyForecast != null && !data.dailyForecast.isEmpty()) {
+                    views.setViewVisibility(R.id.forecast_container, android.view.View.VISIBLE);
+                    views.removeAllViews(R.id.forecast_container);
+
+                    int maxItems = Math.min(5, data.dailyForecast.size());
+                    for (int i = 0; i < maxItems; i++) {
+                        ForecastItem item = data.dailyForecast.get(i);
+                        RemoteViews itemView = new RemoteViews(context.getPackageName(), R.layout.weather_widget_forecast_item);
+                        try {
+                            SimpleDateFormat inputFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault());
+                            SimpleDateFormat outputFormat = new SimpleDateFormat("EEE M/d", Locale.getDefault());
+                            Date date = inputFormat.parse(item.date);
+                            itemView.setTextViewText(R.id.forecast_date, outputFormat.format(date));
+                        } catch (Exception e) {
+                            itemView.setTextViewText(R.id.forecast_date, item.date);
+                        }
+                        itemView.setTextViewText(R.id.forecast_icon, item.icon);
+                        itemView.setTextViewText(R.id.forecast_high, "H:" + item.maxTemp + "°");
+                        itemView.setTextViewText(R.id.forecast_low, "L:" + item.minTemp + "°");
+                        views.addView(R.id.forecast_container, itemView);
+                    }
+                } else {
+                    views.setViewVisibility(R.id.forecast_container, android.view.View.GONE);
+                }
+
+                if (data.latitude != null && data.longitude != null) {
+                    views.setViewVisibility(R.id.radar_link, android.view.View.VISIBLE);
+                    views.setTextViewText(R.id.radar_link, "View Radar Map →");
+                } else {
+                    views.setViewVisibility(R.id.radar_link, android.view.View.GONE);
+                }
             }
-        }
 
         // Wire up buttons
         Intent refreshIntent = new Intent(context, WeatherWidgetProvider.class);
@@ -135,7 +178,14 @@ public class WeatherWidgetUpdateService extends JobIntentService {
             android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE
         ));
 
-        appWidgetManager.updateAppWidget(appWidgetId, views);
+        } catch (Exception e) {
+            // Ensure widget is updated even if there's an error
+            views.setTextViewText(R.id.current_weather, "Error: " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            // Always update the widget, even if there was an error
+            appWidgetManager.updateAppWidget(appWidgetId, views);
+        }
     }
 
     private WeatherData fetchWeatherData(Context context) {
@@ -146,23 +196,28 @@ public class WeatherWidgetUpdateService extends JobIntentService {
             String serverPort = prefs.getString(PREF_SERVER_PORT, "8000");
 
             if (serverIp == null || serverIp.isEmpty()) {
+                android.util.Log.w("WeatherWidget", "Server IP not configured");
                 return null;
             }
 
-            String baseUrl = serverIp;
-            if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
-                baseUrl = "http://" + baseUrl;
+            String baseUrl = normalizeBaseUrl(serverIp, serverPort);
+            if (baseUrl.isEmpty()) {
+                android.util.Log.w("WeatherWidget", "Failed to normalize base URL from IP: " + serverIp + ", Port: " + serverPort);
+                return null;
             }
-            baseUrl = baseUrl + ":" + serverPort;
 
             String urlString = baseUrl + "/api/weather";
+            android.util.Log.d("WeatherWidget", "Fetching weather from: " + urlString);
             URL url = new URL(urlString);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(10000);
 
-            if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
+            int responseCode = conn.getResponseCode();
+            android.util.Log.d("WeatherWidget", "Response code: " + responseCode);
+            
+            if (responseCode == HttpURLConnection.HTTP_OK) {
                 BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
                 StringBuilder response = new StringBuilder();
                 String line;
@@ -181,6 +236,14 @@ public class WeatherWidgetUpdateService extends JobIntentService {
 
                 JSONObject forecast = jsonResponse.optJSONObject("forecast");
                 if (forecast != null) {
+                    // Extract current weather data
+                    JSONObject currentWeather = forecast.optJSONObject("current_weather");
+                    if (currentWeather != null) {
+                        data.currentTemp = currentWeather.optString("temperature", null);
+                        data.currentCondition = getWeatherIcon(currentWeather.optInt("weathercode", 0));
+                        data.currentWeatherCode = currentWeather.optInt("weathercode", 0);
+                    }
+                    
                     JSONObject daily = forecast.optJSONObject("daily");
                     if (daily != null) {
                         JSONArray times = daily.optJSONArray("time");
@@ -202,13 +265,94 @@ public class WeatherWidgetUpdateService extends JobIntentService {
                         }
                     }
                 }
+            } else {
+                android.util.Log.w("WeatherWidget", "HTTP error: " + responseCode);
+                // Try to read error stream for debugging
+                try {
+                    java.io.InputStream errorStream = conn.getErrorStream();
+                    if (errorStream != null) {
+                        BufferedReader errorReader = new BufferedReader(new InputStreamReader(errorStream));
+                        StringBuilder errorResponse = new StringBuilder();
+                        String errorLine;
+                        while ((errorLine = errorReader.readLine()) != null) {
+                            errorResponse.append(errorLine);
+                        }
+                        errorReader.close();
+                        android.util.Log.w("WeatherWidget", "Error response: " + errorResponse.toString());
+                    }
+                } catch (Exception ignored) {}
             }
             conn.disconnect();
+        } catch (java.net.SocketTimeoutException e) {
+            android.util.Log.e("WeatherWidget", "Timeout fetching weather", e);
+            return null;
+        } catch (java.net.UnknownHostException e) {
+            android.util.Log.e("WeatherWidget", "Unknown host", e);
+            return null;
+        } catch (java.io.IOException e) {
+            android.util.Log.e("WeatherWidget", "IO error fetching weather", e);
+            return null;
         } catch (Exception e) {
+            android.util.Log.e("WeatherWidget", "Error fetching weather", e);
             e.printStackTrace();
             return null;
         }
         return data;
+    }
+
+    private String normalizeBaseUrl(String serverIp, String serverPort) {
+        String url = serverIp == null ? "" : serverIp.trim();
+        if (url.isEmpty()) return "";
+        
+        // Remove any existing protocol
+        boolean hasScheme = url.startsWith("http://") || url.startsWith("https://");
+        String cleanUrl = url;
+        if (hasScheme) {
+            cleanUrl = url.replaceFirst("https?://", "");
+        }
+        
+        // Extract host and port if URL contains a colon (might be host:port or full URL)
+        String host = cleanUrl;
+        String existingPort = null;
+        int colonIndex = cleanUrl.indexOf(':');
+        if (colonIndex > 0) {
+            host = cleanUrl.substring(0, colonIndex);
+            String afterColon = cleanUrl.substring(colonIndex + 1);
+            // Check if it's a port number or part of a path
+            if (afterColon.length() > 0 && Character.isDigit(afterColon.charAt(0))) {
+                int slashIndex = afterColon.indexOf('/');
+                if (slashIndex > 0) {
+                    existingPort = afterColon.substring(0, slashIndex);
+                } else {
+                    existingPort = afterColon;
+                }
+            }
+        }
+        
+        // Remove any path components from the host
+        int slashIndex = host.indexOf('/');
+        if (slashIndex > 0) {
+            host = host.substring(0, slashIndex);
+        }
+        
+        // Use existing port if present, otherwise use provided serverPort
+        String portToUse = (existingPort != null && !existingPort.isEmpty()) ? existingPort : serverPort;
+        
+        // Build the final URL
+        try {
+            if (portToUse != null && !portToUse.isEmpty()) {
+                return "http://" + host + ":" + portToUse;
+            } else {
+                return "http://" + host;
+            }
+        } catch (Exception e) {
+            android.util.Log.e("WeatherWidget", "Error normalizing URL", e);
+            // Fallback: try simple approach
+            if (!hasScheme) {
+                url = "http://" + url;
+            }
+            return url;
+        }
     }
 
     private String getWeatherIcon(int code) {

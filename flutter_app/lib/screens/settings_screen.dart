@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import '../services/storage_service.dart';
 import '../services/api_service.dart';
 import '../services/theme_service.dart';
@@ -255,6 +257,66 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     }
   }
+
+  Future<void> _uploadLogs() async {
+    LoggerService().logInfo('SettingsScreen', 'Upload Logs');
+    try {
+      final baseUrl = await ApiService.getBaseUrl();
+      if (baseUrl == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Server not configured'), backgroundColor: Colors.orange),
+          );
+        }
+        return;
+      }
+      final file = await LoggerService().getLogFile();
+      final content = await LoggerService().getLogsAsString();
+      if ((file == null || !(await file.exists())) && content.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No logs available'), backgroundColor: Colors.orange),
+          );
+        }
+        return;
+      }
+      final uri = Uri.parse('$baseUrl/api/logs/upload');
+      final req = http.MultipartRequest('POST', uri);
+      req.fields['deviceId'] = '';
+      req.fields['platform'] = Platform.isAndroid ? 'android' : 'ios';
+      req.fields['appVersion'] = '';
+      req.fields['buildNumber'] = '';
+      if (file != null && await file.exists()) {
+        req.files.add(await http.MultipartFile.fromPath('log', file.path, filename: 'app_logs.txt'));
+      } else {
+        final bytes = utf8.encode(content);
+        req.files.add(http.MultipartFile.fromBytes('log', bytes, filename: 'app_logs.txt'));
+      }
+      final resp = await req.send();
+      if (resp.statusCode >= 200 && resp.statusCode < 300) {
+        final body = await resp.stream.bytesToString();
+        LoggerService().logInfo('SettingsScreen', 'Upload Logs Success', details: body);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Logs uploaded'), backgroundColor: Colors.green),
+          );
+        }
+      } else if (resp.statusCode == 429) {
+        throw Exception('Rate limited');
+      } else if (resp.statusCode == 413) {
+        throw Exception('Log file too large');
+      } else {
+        throw Exception('HTTP ${resp.statusCode}');
+      }
+    } catch (e) {
+      LoggerService().logError('SettingsScreen', 'Upload Logs', e);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Upload failed: ${e.toString()}'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
   
   @override
   Widget build(BuildContext context) {
@@ -457,8 +519,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         ),
                         const SizedBox(height: 8),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: _uploadLogs,
+                            icon: const Icon(Icons.cloud_upload),
+                            label: const Text('Upload Logs to Server'),
+                            style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              backgroundColor: Colors.blue.shade700,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
                         Text(
-                          'Send app logs via email to yourself for debugging',
+                          'Email or upload logs to the server for debugging',
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: Colors.grey[600],
                           ),

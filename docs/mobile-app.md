@@ -275,6 +275,14 @@ The app communicates with the News AI backend using RESTful API endpoints:
 - `POST /api/articles/{id}/chat` - Send chat message
 - `DELETE /api/articles/{id}/chat` - Clear chat history
 
+### Logs
+
+- `POST /api/logs/upload` - Uploads a log file.
+- `GET /api/logs` - Lists uploaded logs.
+- `GET /api/logs/{id}` - Retrieves a specific log.
+- `GET /api/logs/{id}/download` - Downloads a specific log.
+- `DELETE /api/logs/{id}` - Deletes a specific log.
+
 ### Weather
 
 - `GET /api/weather` - Get weather report and forecast
@@ -334,8 +342,10 @@ The app includes comprehensive logging for debugging:
 
 1. Navigate to **Settings** screen
 2. Scroll to **Logs** section
-3. Tap **Email Logs** button
-4. Choose email app to send logs
+3. Tap **Email Logs** to send logs via your email client.
+4. Tap **Upload Logs to Server** to send logs directly to the backend.
+   - Logs will appear in the web UI under the Mobile Logs panel.
+   - Uploads are limited to 5MB and 10 uploads/min per IP.
 
 Logs are stored locally and include timestamps, screen context, and detailed error information.
 

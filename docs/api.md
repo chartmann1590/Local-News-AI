@@ -16,7 +16,7 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
   - Returns paginated articles.
   - Query params: `page` (default 1), `limit` (default 10, max 100).
   - Response: `{ items, page, limit, total, pages }` where each item includes:
-    - `id`, `title`, `source`, `source_url`, `image_url`, `published_at`, `fetched_at`, `ai_model`, `ai_body`, `rewrite_note`, `byline` (present for non-fallback AI articles).
+    - `id`, `title`, `source`, `source_url`, `image_url`, `published_at`, `fetched_at`, `sort_ts`, `ai_model`, `ai_body`, `rewrite_note`, `byline` (present for non-fallback AI articles).
 
 - GET `/api/articles/{id}/chat`
   - Returns `{ author, messages: [{ role, content, created_at }] }` for the article.
@@ -42,6 +42,26 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
   - Returns `{ status: "queued" }`.
 
 ## Configuration & Settings
+## Mobile Logs
+
+- POST `/api/logs/upload` (multipart/form-data)
+  - Fields: `deviceId`, `platform` (`android|ios`), `appVersion`, `buildNumber`, `notes` (optional), `log` (file)
+  - Limits: up to 5MB; 10 requests/min per IP; text content only
+  - Returns: `{ id, uploadedAt }`
+
+- GET `/api/logs`
+  - Query: `q` (search query), `platform`, `deviceId`, `after`, `before`, `page`, `pageSize`
+  - Returns: `{ items: [{ id, device_id, platform, app_version, build_number, uploaded_at, file_size_bytes }], page, pageSize, total }`
+
+- GET `/api/logs/{id}`
+  - Returns: metadata plus `preview` (first 256KB as UTF‑8)
+
+- GET `/api/logs/{id}/download`
+  - Returns the raw log file (text/plain)
+
+- DELETE `/api/logs/{id}`
+  - Deletes the log file and its metadata
+
 
 - GET `/api/config`
   - Returns minimal configuration info: `{ location, timezone, min_articles }`.
@@ -58,6 +78,9 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
   - Sets the active location and triggers a weather refresh in the background.
 - POST `/api/location/auto`
   - Attempts to auto-detect location (IP geolocation). Triggers weather refresh.
+- POST `/api/location-disabled`
+  - Body: `{ location: "City, State or ZIP" }`.
+  - Sets the active location without triggering a weather refresh.
 
 ## Maintenance
 

@@ -16,6 +16,7 @@ services:
       - SCHEDULE_NOON=${SCHEDULE_NOON:-12:00}
       - SCHEDULE_EVENING=${SCHEDULE_EVENING:-19:30}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - TTS_BASE_URL=${TTS_BASE_URL:-http://tts:5500}
       - FEED_EXTRA_URLS=${FEED_EXTRA_URLS:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:

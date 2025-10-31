@@ -193,6 +193,12 @@ SCHEDULER: Optional[BackgroundScheduler] = None
 
 
 def start_scheduler() -> BackgroundScheduler:
+    global SCHEDULER
+    # If scheduler exists and is running, shut it down first
+    if SCHEDULER is not None and SCHEDULER.running:
+        logger.info("scheduler_restarting", extra={"old_tz": SCHEDULER.timezone if hasattr(SCHEDULER, 'timezone') else None})
+        SCHEDULER.shutdown(wait=False)
+    
     tzname = _tz_name()
     tz = pytz.timezone(tzname)
     sched = BackgroundScheduler(timezone=tz)
@@ -206,15 +212,20 @@ def start_scheduler() -> BackgroundScheduler:
         (h2, m2, "noon"),
         (h3, m3, "evening"),
     ]:
-        trigger = CronTrigger(hour=hh, minute=mm)
+        trigger = CronTrigger(hour=hh, minute=mm, timezone=tz)
         sched.add_job(run_harvest_once, trigger=trigger, id=f"harvest_{name}", coalesce=True, max_instances=1)
         logger.info("scheduler_job_added", extra={"job": name, "hour": hh, "minute": mm, "tz": tzname})
 
     sched.start()
     logger.info("scheduler_started", extra={"tz": tzname})
-    global SCHEDULER
     SCHEDULER = sched
     return sched
+
+
+def restart_scheduler() -> BackgroundScheduler:
+    """Restart the scheduler with the current timezone from the database."""
+    logger.info("scheduler_restart_requested")
+    return start_scheduler()
 
 
 def next_runs() -> List[Dict[str, str]]:

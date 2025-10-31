@@ -59,8 +59,22 @@ class LoggerService {
   }
   
   Future<Directory> _getLogDirectory() async {
-    final directory = await getApplicationDocumentsDirectory();
-    return directory;
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final dir = Directory('${docs.path}/logs');
+      if (!(await dir.exists())) {
+        await dir.create(recursive: true);
+      }
+      return dir;
+    } catch (e) {
+      // Fallback to system temp directory
+      final tmp = Directory.systemTemp;
+      final dir = Directory('${tmp.path}/news_ai_logs');
+      if (!(await dir.exists())) {
+        await dir.create(recursive: true);
+      }
+      return dir;
+    }
   }
   
   Future<File?> getLogFile() async {

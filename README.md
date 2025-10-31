@@ -1,75 +1,71 @@
-Local News & Weather (Dockerized)
-================================
+# 📰 News AI: Your Personal Local News Aggregator
 
-Fast local news + weather with on‑device AI rewrites (Ollama). Clean UI. Zero external paid APIs.
+**News AI** is a self-hosted, Dockerized application that delivers localized news and weather with AI-powered article summaries. It's designed to be a private, cost-effective, and highly customizable news source.
 
-Features
-- Automatic location detection with manual override in Settings
-- 3×/day scheduled harvesting (configurable) with Ollama article rewrites
-- Weather report with daily icons and an embedded radar
-- Smart deduplication (by normalized title and image) after each run
-- Pagination (10/page), live progress, “Now rewriting” details, single-threaded rewrites
-- Optional offline Text-to-Speech (Piper via OpenTTS) for articles and weather
-- Per-article AI comments: click Comments under any article to chat with the AI using the article’s content; replies use the article’s generated author name
-- Light/Dark theme toggle with persistent preference
-- Android Mobile App: Native Flutter app with full feature parity (see Mobile App section below)
+## ✨ Features
 
-Quick Start
-1) Requirements
-   - Docker and Docker Compose
-   - Ollama on the host (`http://localhost:11434`) with a model available (e.g., `llama3.2`)
+*   **📍 Automatic Location Detection:** Get news and weather relevant to your current location, with a manual override option.
+*   **🤖 AI-Powered Summaries:** Uses a local Ollama instance to rewrite and summarize news articles.
+*   **🌦️ Weather Reports:** Includes a 5-day forecast, weather icons, and an embedded radar map.
+*   **🗣️ Text-to-Speech:** Listen to articles and weather reports with offline TTS (OpenTTS/Piper).
+*   **💬 AI Comments:** Engage in a conversation with the AI about each article.
+*   **📱 Mobile & Web Apps:** Access your news via a web interface (PWA) or a native Android app built with Flutter.
+*   **🎨 Light/Dark Mode:** Choose your preferred theme.
+*   **⚙️ Highly Configurable:** Customize schedules, news sources, and AI models.
 
-2) Run
-   - Build + start: `docker compose up --build -d`
-   - App: http://localhost:18080
-   - TTS service (internal): http://news-ai-tts:5500 (exposed to app only)
+## 🛠️ Technologies
 
-3) Configure (optional)
-   - Edit env vars in `docker-compose.yml` (see docs below)
-   - Or use the in‑app Settings for Ollama URL/model, units (°F/°C), and location
+*   **Backend:** Python, FastAPI, SQLAlchemy, APScheduler
+*   **Frontend (Web):** React, Vite, Tailwind CSS
+*   **Frontend (Mobile):** Flutter
+*   **AI:** Ollama
+*   **TTS:** OpenTTS (Piper)
+*   **Database:** SQLite
+*   **Deployment:** Docker, Docker Compose, Nginx
 
-Using the App
-- Header → Run Now to trigger an immediate harvest
-- Header → Theme button toggles between light and dark modes
-- Settings → Install App lets you install the PWA on supported browsers (Android/Chrome and desktop). On iOS Safari, use Share → Add to Home Screen.
-- Weather (left): AI report, 5-day icons, radar
-- News (right): latest local articles with rewrites, bylines, and pagination
-- Article Chat: expand Comments on any article to ask questions about it; the AI replies using only that article’s details
-- Settings: Ollama settings, units, location, Maintenance (Deduplicate / Rewrite Missing)
-  - Text-to-Speech: enable, set base URL (default `http://tts:5500`), choose a voice, and preview
+## 🚀 Getting Started
 
-Mobile App
-- Native Android app built with Flutter
-- Full feature parity with web interface
-- Available as pre-built APK in `app/static/news-ai-app.apk`
-- Download from web interface at `http://your-server:port/static/news-ai-app.apk`
-- See `docs/mobile-app.md` for complete documentation, setup, and usage guide
+### Prerequisites
 
-Documentation
-- Overview & Setup: docs/README.md
-- Mobile App: docs/mobile-app.md
-- Configuration: docs/configuration.md
-- Setup & Run: docs/setup.md
-- Maintenance & Data: docs/maintenance.md
-- Customization: docs/customization.md
-- Architecture: docs/architecture.md
-- Deployment tips: docs/deployment.md
-- Troubleshooting: docs/troubleshooting.md
-- API Reference: docs/api.md
+*   [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/)
+*   [Ollama](https://ollama.ai/) installed and running on the host machine.
 
-Notes
-- SQLite DB at `./data/app.db` (mounted volume in Compose)
-- APScheduler handles internal schedules
-- On Linux, if `host.docker.internal` is unavailable, set `OLLAMA_BASE_URL` to your host IP (e.g., `http://172.17.0.1:11434`)
-- Chat rate limiting: env `CHAT_RATE_LIMIT_PER_MIN` controls per-IP per-article limit (default 10)
-- Frontend styling uses compiled Tailwind CSS (darkMode: 'class'); to apply UI changes rebuild the `app` image and recreate the container
+### Installation
 
-Text‑to‑Speech (TTS)
-- Self‑hosted, free, offline TTS using OpenTTS (Piper engine) in its own container.
-- Multiple natural voices; voices are cached under `./data/tts` on first use.
-- Enable under Settings → Text‑to‑Speech. Default TTS URL is `http://tts:5500` (Docker service name).
-- The player shows play/pause, a seek slider, elapsed/total, and remaining time.
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/your-username/news-ai.git
+    cd news-ai
+    ```
 
-Security
-- Sources are free RSS/HTML only; no paid APIs included
-- AI rewrites preserve attribution — verify facts at the source link
+2.  **Build and start the containers:**
+    ```bash
+    docker compose up --build -d
+    ```
+
+3.  **Access the application:**
+    *   Web app: [http://localhost:18080](http://localhost:18080)
+    *   Web app (HTTPS): [https://localhost:18443](https://localhost:18443)
+
+## 📖 Documentation
+
+For more detailed information, please refer to the documentation in the `docs` directory:
+
+*   [**`docs/README.md`**](./docs/README.md): Documentation overview and index.
+*   [**`docs/setup.md`**](./docs/setup.md): Detailed setup and configuration instructions.
+*   [**`docs/mobile-app.md`**](./docs/mobile-app.md): Mobile app setup and usage guide.
+*   [**`docs/api.md`**](./docs/api.md): API reference.
+*   [**`docs/architecture.md`**](./docs/architecture.md): Application architecture.
+*   [**`docs/configuration.md`**](./docs/configuration.md): Environment variables and in-app settings.
+*   [**`docs/customization.md`**](./docs/customization.md): How to customize the application.
+*   [**`docs/deployment.md`**](./docs/deployment.md): Deployment tips.
+*   [**`docs/maintenance.md`**](./docs/maintenance.md): Maintenance and data management.
+*   [**`docs/troubleshooting.md`**](./docs/troubleshooting.md): Troubleshooting common issues.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a pull request or open an issue.
+
+## 📝 License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
