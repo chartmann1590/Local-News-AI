@@ -26,6 +26,7 @@ class AppSettings(Base):
     ollama_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     ollama_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     temp_unit: Mapped[str | None] = mapped_column(String(1), nullable=True)  # 'F' or 'C'
+    wind_speed_unit: Mapped[str | None] = mapped_column(String(10), nullable=True)  # 'mph' or 'kmh'
     updated_at: Mapped[DateTime | None] = mapped_column(DateTime, nullable=True)
 
 

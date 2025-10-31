@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 
@@ -24,3 +24,11 @@ Base = declarative_base()
 def init_db():
     from . import models  # noqa: F401 - ensure models are imported
     Base.metadata.create_all(bind=engine)
+    # Migration: Add wind_speed_unit column if it doesn't exist
+    with engine.connect() as conn:
+        # Check if column exists by inspecting table info
+        result = conn.execute(text("PRAGMA table_info(app_settings)"))
+        columns = [row[1] for row in result]
+        if "wind_speed_unit" not in columns:
+            conn.execute(text("ALTER TABLE app_settings ADD COLUMN wind_speed_unit VARCHAR(10)"))
+            conn.commit()

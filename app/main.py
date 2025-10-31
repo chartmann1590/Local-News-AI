@@ -679,14 +679,27 @@ def api_weather():
                 forecast = json.loads(wr.forecast_json)
             except Exception:
                 forecast = {}
+        tz_name = (cfg.timezone if cfg else os.environ.get("TZ", "America/New_York"))
+        
+        # Use ai_generated_at if available, otherwise fall back to fetched_at
+        # Keep as UTC ISO - frontend will convert to location timezone
+        updated_at = None
+        if wr:
+            dt = wr.ai_generated_at if (wr.ai_generated_at and wr.ai_report) else wr.fetched_at
+            if dt:
+                # Ensure UTC timezone for consistent handling
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                updated_at = dt.isoformat()
+        
         result = {
             "location": (cfg.location_name if cfg else os.environ.get("LOCATION_NAME", "Local")),
-            "timezone": (cfg.timezone if cfg else os.environ.get("TZ", "America/New_York")),
+            "timezone": tz_name,
             "latitude": (cfg.latitude if cfg else None),
             "longitude": (cfg.longitude if cfg else None),
             "report": (wr.ai_report if wr else None),
             "forecast": forecast,
-            "updated_at": (wr.fetched_at.isoformat() if wr and wr.fetched_at else None),
+            "updated_at": updated_at,
         }
         if wr and (wr.ai_model or "").startswith("fallback:"):
             result["report_note"] = "AI report unavailable — showing raw forecast data."
@@ -767,10 +780,11 @@ async def api_set_location_new(payload: dict):
                 base_url = aset.ollama_base_url if aset and aset.ollama_base_url else None
                 model = aset.ollama_model if aset and aset.ollama_model else None
                 temp_unit = aset.temp_unit if aset and aset.temp_unit else None
+                wind_speed_unit = aset.wind_speed_unit if aset and aset.wind_speed_unit else None
             finally:
                 session.close()
             scheduler_mod.progress.phase('weather_fetch', 'Updating due to location change')
-            scheduler_mod._gen_weather_report(cfg.location_name, base_url=base_url, model=model, temp_unit=temp_unit)
+            scheduler_mod._gen_weather_report(cfg.location_name, base_url=base_url, model=model, temp_unit=temp_unit, wind_speed_unit=wind_speed_unit)
         except Exception:
             logger.exception("location_change_refresh_failed")
     threading.Thread(target=_bg_refresh, daemon=True).start()
@@ -798,10 +812,11 @@ def api_auto_location():
                 base_url = aset.ollama_base_url if aset and aset.ollama_base_url else None
                 model = aset.ollama_model if aset and aset.ollama_model else None
                 temp_unit = aset.temp_unit if aset and aset.temp_unit else None
+                wind_speed_unit = aset.wind_speed_unit if aset and aset.wind_speed_unit else None
             finally:
                 session.close()
             scheduler_mod.progress.phase('weather_fetch', 'Updating due to auto location')
-            scheduler_mod._gen_weather_report(cfg.location_name, base_url=base_url, model=model, temp_unit=temp_unit)
+            scheduler_mod._gen_weather_report(cfg.location_name, base_url=base_url, model=model, temp_unit=temp_unit, wind_speed_unit=wind_speed_unit)
         except Exception:
             logger.exception("auto_location_refresh_failed")
     threading.Thread(target=_bg_refresh, daemon=True).start()
@@ -816,6 +831,7 @@ def api_get_settings():
             "ollama_base_url": s.ollama_base_url if s else None,
             "ollama_model": s.ollama_model if s else None,
             "temp_unit": s.temp_unit if s else "F",
+            "wind_speed_unit": s.wind_speed_unit if s else "mph",
         }
     finally:
         session.close()
@@ -838,6 +854,12 @@ def api_set_settings(payload: dict):
             new_unit = (payload.get("temp_unit") or "").upper()[:1] or None
             changed_unit = (new_unit != s.temp_unit)
             s.temp_unit = new_unit
+        if "wind_speed_unit" in payload:
+            new_wind_unit = (payload.get("wind_speed_unit") or "").lower() or None
+            if new_wind_unit in ("mph", "kmh"):
+                wind_unit_changed = (new_wind_unit != s.wind_speed_unit)
+                changed_unit = changed_unit or wind_unit_changed
+                s.wind_speed_unit = new_wind_unit
         s.updated_at = datetime.utcnow()
         session.merge(s)
         session.commit()
@@ -853,11 +875,12 @@ def api_set_settings(payload: dict):
                     base_url = aset.ollama_base_url if aset and aset.ollama_base_url else None
                     model = aset.ollama_model if aset and aset.ollama_model else None
                     temp_unit = aset.temp_unit if aset and aset.temp_unit else None
+                    wind_speed_unit = aset.wind_speed_unit if aset and aset.wind_speed_unit else None
                 finally:
                     cfg_session.close()
                 loc = cfg.location_name if cfg else os.environ.get("LOCATION_NAME", "Local")
                 scheduler_mod.progress.phase('weather_fetch', 'Updating due to unit change')
-                scheduler_mod._gen_weather_report(loc, base_url=base_url, model=model, temp_unit=temp_unit)
+                scheduler_mod._gen_weather_report(loc, base_url=base_url, model=model, temp_unit=temp_unit, wind_speed_unit=wind_speed_unit)
             except Exception:
                 logger.exception("unit_change_refresh_failed")
         threading.Thread(target=_bg_refresh_unit, daemon=True).start()
@@ -874,10 +897,11 @@ def api_refresh_weather():
                 base_url = aset.ollama_base_url if aset and aset.ollama_base_url else None
                 model = aset.ollama_model if aset and aset.ollama_model else None
                 temp_unit = aset.temp_unit if aset and aset.temp_unit else None
+                wind_speed_unit = aset.wind_speed_unit if aset and aset.wind_speed_unit else None
             finally:
                 session.close()
             scheduler_mod.progress.phase('weather_fetch', 'Manual refresh')
-            scheduler_mod._gen_weather_report(cfg.location_name, base_url=base_url, model=model, temp_unit=temp_unit)
+            scheduler_mod._gen_weather_report(cfg.location_name, base_url=base_url, model=model, temp_unit=temp_unit, wind_speed_unit=wind_speed_unit)
         except Exception:
             logger.exception("weather_manual_refresh_failed")
     threading.Thread(target=_bg, daemon=True).start()

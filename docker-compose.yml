@@ -26,9 +26,8 @@ services:
   tts:
     image: synesthesiam/opentts:latest
     container_name: news-ai-tts
-    environment:
-      # Limit to light, local voices; Piper is CPU-friendly
-      - OPENTTS_ENGINES=piper
+    # Enable all available TTS engines (Coqui, Piper, Larynx, etc.)
+    # OPENTTS_ENGINES is not set, allowing all engines
     volumes:
       - ./data/tts:/root/.local/share/opentts
     expose:

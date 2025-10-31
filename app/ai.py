@@ -67,16 +67,21 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
     return None
 
 
-def generate_weather_report(forecast: Dict[str, Any], location: str, *, base_url: Optional[str] = None, model: Optional[str] = None, timeout_s: int = 600) -> Optional[str]:
+def generate_weather_report(forecast: Dict[str, Any], location: str, *, base_url: Optional[str] = None, model: Optional[str] = None, wind_speed_unit: Optional[str] = None, timeout_s: int = 600) -> Optional[str]:
     # Keep prompt compact; include key stats only
     try:
         trimmed = json.dumps(forecast)[:8000]
     except Exception:
         trimmed = json.dumps({})
 
+    wind_unit_note = ""
+    if wind_speed_unit:
+        unit_label = "mph" if wind_speed_unit.lower() == "mph" else "km/h"
+        wind_unit_note = f" When mentioning wind speeds, use {unit_label} as the unit."
+
     system_prompt = (
         "You are a concise meteorologist. Using the provided forecast JSON, write a short, clear local weather report. "
-        "Include current conditions and a 5-day outlook. Keep it factual and neutral."
+        "Include current conditions and a 5-day outlook. Keep it factual and neutral." + wind_unit_note
     )
     user_prompt = (
         f"Location: {location}\n"

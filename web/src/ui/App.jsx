@@ -258,8 +258,16 @@ function Weather({ weather, tts }) {
         <div className="font-semibold">Weather</div>
       </div>
       <div className="p-5 space-y-4">
-        {weather?.updated_at && (
-          <div className="text-sm text-slate-500">Updated: {new Date(weather.updated_at).toLocaleString()}</div>
+        {weather?.updated_at && weather?.timezone && (
+          <div className="text-sm text-slate-500">Updated: {new Date(weather.updated_at).toLocaleString('en-US', { 
+            timeZone: weather.timezone,
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+          })}</div>
         )}
         {weather?.report_note && (
           <div className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-800 inline-block dark:bg-amber-900/40 dark:text-amber-300">{weather.report_note}</div>
@@ -846,6 +854,7 @@ function SettingsPanel({ onClose, reloadAll }) {
     ollama_base_url: '',
     ollama_model: '',
     temp_unit: 'F',
+    wind_speed_unit: 'mph',
     tts_enabled: false,
     tts_base_url: '',
     tts_voice: '',
@@ -875,6 +884,7 @@ function SettingsPanel({ onClose, reloadAll }) {
           ollama_base_url: s.ollama_base_url || '',
           ollama_model: s.ollama_model || '',
           temp_unit: s.temp_unit || 'F',
+          wind_speed_unit: s.wind_speed_unit || 'mph',
           tts_enabled: !!ts.enabled,
           tts_base_url: ts.base_url || 'http://tts:5500',
           tts_voice: ts.voice || '',
@@ -942,6 +952,7 @@ function SettingsPanel({ onClose, reloadAll }) {
         ollama_base_url: form.ollama_base_url,
         ollama_model: form.ollama_model,
         temp_unit: form.temp_unit,
+        wind_speed_unit: form.wind_speed_unit,
       }) })
       // Persist TTS settings separately
       await fetch('/api/tts/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
@@ -1144,7 +1155,11 @@ function SettingsPanel({ onClose, reloadAll }) {
               <label className="inline-flex items-center gap-2"><input type="radio" name="unit" checked={(form.temp_unit||'F')==='F'} onChange={()=>setForm(f=>({...f, temp_unit:'F'}))}/> <span>Fahrenheit (°F)</span></label>
               <label className="inline-flex items-center gap-2"><input type="radio" name="unit" checked={(form.temp_unit||'F')==='C'} onChange={()=>setForm(f=>({...f, temp_unit:'C'}))}/> <span>Celsius (°C)</span></label>
             </div>
-            <div className="text-xs text-slate-500 mt-1">Changing units triggers a fresh forecast fetch and AI weather report.</div>
+            <div className="text-xs text-slate-500 mt-1 mb-3">Changing units triggers a fresh forecast fetch and AI weather report.</div>
+            <div className="flex items-center gap-3">
+              <label className="inline-flex items-center gap-2"><input type="radio" name="wind_unit" checked={(form.wind_speed_unit||'mph')==='mph'} onChange={()=>setForm(f=>({...f, wind_speed_unit:'mph'}))}/> <span>Miles per hour (mph)</span></label>
+              <label className="inline-flex items-center gap-2"><input type="radio" name="wind_unit" checked={(form.wind_speed_unit||'mph')==='kmh'} onChange={()=>setForm(f=>({...f, wind_speed_unit:'kmh'}))}/> <span>Kilometers per hour (km/h)</span></label>
+            </div>
           </section>
 
           <section>

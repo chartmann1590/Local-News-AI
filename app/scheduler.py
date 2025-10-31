@@ -101,7 +101,7 @@ def _rewrite_and_store(articles, *, base_url: str | None, model: str | None):
         session.close()
 
 
-def _gen_weather_report(location: str, *, base_url: str | None, model: str | None, temp_unit: str | None):
+def _gen_weather_report(location: str, *, base_url: str | None, model: str | None, temp_unit: str | None, wind_speed_unit: str | None = None):
     tz = _tz_name()
     # Refresh forecast record based on resolved coordinates when available
     lat = None
@@ -113,7 +113,7 @@ def _gen_weather_report(location: str, *, base_url: str | None, model: str | Non
     except Exception:
         pass
     progress.phase('weather_fetch', 'Updating weather forecast')
-    wr = update_weather(location=location, tz=tz, lat=lat, lon=lon, temp_unit=temp_unit)
+    wr = update_weather(location=location, tz=tz, lat=lat, lon=lon, temp_unit=temp_unit, wind_speed_unit=wind_speed_unit)
     if not wr:
         logger.warning("weather_update_failed", extra={"location": location})
         return
@@ -127,7 +127,7 @@ def _gen_weather_report(location: str, *, base_url: str | None, model: str | Non
     # Retry up to 3 times, 10 minute timeout per attempt
     text = None
     for _attempt in range(3):
-        text = generate_weather_report(forecast, location, base_url=base_url, model=model, timeout_s=600)
+        text = generate_weather_report(forecast, location, base_url=base_url, model=model, wind_speed_unit=wind_speed_unit, timeout_s=600)
         if text:
             break
     if text:
@@ -172,6 +172,7 @@ def run_harvest_once():
         base_url = (aset.ollama_base_url if aset and aset.ollama_base_url else os.environ.get("OLLAMA_BASE_URL"))
         model = (aset.ollama_model if aset and aset.ollama_model else os.environ.get("OLLAMA_MODEL"))
         temp_unit = (aset.temp_unit if aset and aset.temp_unit else None)
+        wind_speed_unit = (aset.wind_speed_unit if aset and aset.wind_speed_unit else None)
     finally:
         session.close()
     # Ensure only a single rewrite runs at a time
@@ -184,7 +185,7 @@ def run_harvest_once():
     except Exception:
         logger.exception("post_run_dedup_failed")
     # Update weather and generate report
-    _gen_weather_report(location, base_url=base_url, model=model, temp_unit=temp_unit)
+    _gen_weather_report(location, base_url=base_url, model=model, temp_unit=temp_unit, wind_speed_unit=wind_speed_unit)
     logger.info("harvest_complete", extra={"location": location, "fetched": len(new_arts) if new_arts else 0})
     progress.finish()
 

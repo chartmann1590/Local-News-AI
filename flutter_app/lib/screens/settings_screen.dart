@@ -33,6 +33,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _ttsVoice = '';
   double _ttsSpeed = 1.0;
   String _tempUnit = 'F';
+  String _windSpeedUnit = 'mph';
   
   @override
   void initState() {
@@ -73,6 +74,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _ttsVoice = ttsSettings['voice'] as String? ?? '';
           _ttsSpeed = (ttsSettings['speed'] as num?)?.toDouble() ?? 1.0;
           _tempUnit = settings['temp_unit'] as String? ?? 'F';
+          _windSpeedUnit = settings['wind_speed_unit'] as String? ?? 'mph';
           _ttsBaseUrlController.text = _ttsBaseUrl;
           _ttsVoiceController.text = _ttsVoice;
           _isLoading = false;
@@ -94,6 +96,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       await ApiService.updateSettings({
         'temp_unit': _tempUnit,
+        'wind_speed_unit': _windSpeedUnit,
       }, screenContext: 'SettingsScreen');
       
       await ApiService.updateTtsSettings({
@@ -568,6 +571,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             }
                           },
                           title: const Text('Celsius (°C)'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    _buildSection(
+                      title: 'Wind Speed Units',
+                      children: [
+                        RadioListTile<String>(
+                          value: 'mph',
+                          groupValue: _windSpeedUnit,
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() {
+                                _windSpeedUnit = value;
+                              });
+                            }
+                          },
+                          title: const Text('Miles per hour (mph)'),
+                        ),
+                        RadioListTile<String>(
+                          value: 'kmh',
+                          groupValue: _windSpeedUnit,
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() {
+                                _windSpeedUnit = value;
+                              });
+                            }
+                          },
+                          title: const Text('Kilometers per hour (km/h)'),
                         ),
                       ],
                     ),
