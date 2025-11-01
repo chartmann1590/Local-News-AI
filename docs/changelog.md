@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Article Sharing:** Share articles from both the web and mobile apps. (2025-10-31)
+- **Force Rewrite:** Manually trigger an AI rewrite for an article from the article details screen. (2025-10-31)
 - **Article Bookmarking:** You can now bookmark articles in both the web and mobile apps. (2025-10-31)
 - **Search and Filtering:** You can now search for articles by keyword and filter by source in both the web and mobile apps. (2025-10-31)
 - **Wind Speed Unit Setting:** You can now select your preferred wind speed unit (mph or km/h) in the settings. The AI-generated weather reports will use the selected unit. (2025-10-30)
@@ -15,6 +17,9 @@
 
 ### Changed
 
+- **Docker:** The `nginx` service now generates its own self-signed certificate and configuration, removing the need for pre-existing files. (2025-10-31)
+- **Flutter:** The `compileSdk` version has been set to 33 for better compatibility. (2025-10-31)
+- **Web & Mobile:** The article view now shows the original content if an AI rewrite is not yet available. (2025-10-31)
 - **TTS Service:** The TTS service now supports all available OpenTTS engines, not just Piper. (2025-10-30)
 - **Weather Display:** The web UI now displays the weather's `updated_at` time in the location's timezone. (2025-10-30)
 - **Android Widgets:** Major improvements to the news and weather widgets, including better data handling, improved UI, and more detailed weather information. (2025-10-30)
@@ -25,6 +30,7 @@
 
 ### Fixed
 
+- **Playwright Tests:** The bookmarking tests have been made more robust to handle asynchronous operations and network delays. (2025-10-31)
 - **Database Migration:** A database migration has been added to automatically add the `wind_speed_unit` column to the `app_settings` table, ensuring smooth updates. (2025-10-30)
 - **Scheduler:** The scheduler now uses the location's timezone instead of UTC. (2025-10-30)
 - **Flutter:** Fixed config navigation, increased timeouts, added retries, and robust link launch. (2025-10-29)
