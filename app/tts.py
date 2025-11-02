@@ -59,7 +59,7 @@ class TTSClient:
         params["format"] = "wav"
         try:
             with requests.get(
-                f"{self.base_url}/api/tts", params=params, stream=True, timeout=60
+                f"{self.base_url}/api/tts", params=params, stream=True, timeout=600
             ) as r:
                 r.raise_for_status()
                 buf = io.BytesIO()

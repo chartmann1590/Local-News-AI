@@ -1,0 +1,59 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e2]:
+  - generic [ref=e4]:
+    - generic [ref=e5]: 📰
+    - generic [ref=e6]: Local News & Weather
+    - generic [ref=e9]: Loading…
+  - banner [ref=e10]:
+    - generic [ref=e13]:
+      - generic [ref=e14]: 📰
+      - generic [ref=e15]:
+        - generic [ref=e16]: Local News & Weather
+        - generic [ref=e17]: Powered by Ollama · Resolving…
+      - generic [ref=e19]:
+        - textbox "Search articles..." [ref=e20]
+        - generic [ref=e21]: 🔍
+      - generic [ref=e22]:
+        - button "Switch to dark mode" [ref=e23] [cursor=pointer]: 🌙
+        - link "📱 Download App" [ref=e24] [cursor=pointer]:
+          - /url: /static/news-ai-app.apk
+          - generic [ref=e25]: 📱
+          - generic [ref=e26]: Download App
+        - button "Run Now" [ref=e27] [cursor=pointer]
+        - button "Settings" [ref=e28] [cursor=pointer]
+  - generic [ref=e31]:
+    - generic [ref=e32]: "Next runs:"
+    - generic [ref=e33]:
+      - generic [ref=e34]: Nov 1, 2025, 07:30:00 AM (morning)
+      - generic [ref=e35]: Nov 1, 2025, 12:00:00 PM (noon)
+      - generic [ref=e36]: Nov 1, 2025, 07:30:00 PM (evening)
+    - generic [ref=e37]: "Started: 07:30:00 PM"
+    - generic [ref=e38]: "Finished: 07:50:24 PM"
+  - generic [ref=e39]:
+    - button "⭐ Bookmarks" [ref=e40] [cursor=pointer]
+    - button "▶ Filters" [ref=e41] [cursor=pointer]
+    - button "Show Logs" [ref=e42] [cursor=pointer]
+  - generic [ref=e45]:
+    - text: "Location: Resolving…"
+    - button "Change" [ref=e46] [cursor=pointer]
+  - main [ref=e47]:
+    - generic [ref=e48]:
+      - generic [ref=e49]:
+        - generic [ref=e50]:
+          - generic [ref=e51]: ☀️
+          - generic [ref=e52]: Weather
+        - generic [ref=e54]: Weather report is generating…
+      - generic [ref=e55]:
+        - generic [ref=e57]:
+          - generic [ref=e58]: 🗞️
+          - generic [ref=e59]: Latest Local News
+          - generic [ref=e60]: "Minimum per run: 10"
+        - generic [ref=e61]:
+          - generic [ref=e62]: Page 1 of 1
+          - generic [ref=e63]:
+            - button "Prev" [disabled] [ref=e64]
+            - button "Next" [disabled] [ref=e65]
+  - contentinfo [ref=e87]: Built from free sources (RSS + Open‑Meteo). AI rewrites cite originals.
+```

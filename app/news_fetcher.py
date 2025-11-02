@@ -106,8 +106,12 @@ def extra_feed_urls() -> List[str]:
 
 
 def parse_published(value) -> Optional[datetime]:
+    if not value:
+        return None
     try:
-        return dateparser.parse(value)
+        # Limit parsing time - dateparser can be slow on malformed dates
+        result = dateparser.parse(value, settings={'STRICT_PARSING': False})
+        return result
     except Exception:
         return None
 
@@ -140,7 +144,9 @@ def _extract_final_url_from_entry(entry) -> str:
                 t = (q.get('url') or [None])[0]
                 if t:
                     return normalize_url(t)
-            resp = requests.get(link, headers=_headers(), timeout=15, allow_redirects=True)
+            # Reduced timeout and skip redirect following for Google News in gather phase
+            # to prevent hangs - will extract URL from params first when possible
+            resp = requests.get(link, headers=_headers(), timeout=5, allow_redirects=True, stream=False)
             if resp.url:
                 return normalize_url(resp.url)
         except Exception:
@@ -190,56 +196,116 @@ def fetch_article_content(url: str) -> Tuple[Optional[str], Optional[str]]:
 
 
 def gather_candidates(location: str) -> List[Dict]:
-    # Prefer Bing (less likely to 503) before Google
-    feeds = build_bing_news_feeds(location) + build_google_news_feeds(location) + extra_feed_urls()
-    items: List[Dict] = []
-    logger.info("feeds_start", extra={"count": len(feeds)})
-    max_feeds = 12
-    for i, feed_url in enumerate(feeds):
-        if i >= max_feeds:
-            break
-        try:
-            r = requests.get(feed_url, headers={"User-Agent": USER_AGENT}, timeout=6)
-            if r.status_code != 200:
-                logger.warning("feed_http_status", extra={"url": feed_url, "status": r.status_code})
-                continue
-            parsed = feedparser.parse(r.content)
+    try:
+        # Prefer Bing (less likely to 503) before Google
+        feeds = build_bing_news_feeds(location) + build_google_news_feeds(location) + extra_feed_urls()
+        items: List[Dict] = []
+        logger.info("feeds_start", extra={"count": len(feeds)})
+        max_feeds = 12
+        from urllib.parse import urlparse, parse_qs
+        
+        for i, feed_url in enumerate(feeds):
+            if i >= max_feeds:
+                break
             try:
-                logger.info("feed_ok", extra={"url": feed_url, "entries": len(parsed.entries)})
-            except Exception:
-                pass
-        except Exception as e:
-            logger.warning("feed_error", extra={"url": feed_url, "error": str(e)})
-            continue
-        for e in parsed.entries:
-            url = normalize_url(_extract_final_url_from_entry(e))
-            if not url:
+                r = requests.get(feed_url, headers={"User-Agent": USER_AGENT}, timeout=6)
+                if r.status_code != 200:
+                    logger.warning("feed_http_status", extra={"url": feed_url, "status": r.status_code})
+                    continue
+                parsed = feedparser.parse(r.content)
+                try:
+                    logger.info("feed_ok", extra={"url": feed_url, "entries": len(parsed.entries)})
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.warning("feed_error", extra={"url": feed_url, "error": str(e)})
                 continue
-            title = e.get("title")
-            source_name = None
-            if "source" in e and hasattr(e.source, "title"):
-                source_name = e.source.title
-            published = parse_published(e.get("published") or e.get("updated"))
-            items.append(
-                {
-                    "url": url,
-                    "title": title,
-                    "source_name": source_name,
-                    "published": published,
-                }
-            )
-    # Deduplicate by URL (normalized)
-    uniq: Dict[str, Dict] = {}
-    for it in items:
-        key = normalize_url(it["url"])
-        if key not in uniq:
-            it["url"] = key
-            uniq[key] = it
-    out = list(uniq.values())
-    if len(out) > 60:
-        out = out[:60]
-    logger.info("feeds_parsed", extra={"candidates": len(out)})
-    return out
+            
+            # Process entries - NO HTTP REQUESTS, just parse URLs
+            entry_count = 0
+            max_entries_per_feed = 20  # Limit entries per feed
+            entries_to_process = parsed.entries[:max_entries_per_feed]
+            logger.info("feed_processing_entries", extra={"feed_index": i, "entry_count": len(entries_to_process)})
+            for e in entries_to_process:
+                entry_count += 1
+                link = e.get("link", "")
+                if not link:
+                    continue
+                
+                url = None
+                try:
+                    # Quick path: extract URL from query param for Google/Bing - NO HTTP requests
+                    if "news.google.com" in link and "url=" in link:
+                        q = parse_qs(urlparse(link).query)
+                        t = (q.get('url') or [None])[0]
+                        if t:
+                            url = normalize_url(t)
+                    elif "bing.com/news/apiclick.aspx" in link and "url=" in link:
+                        q = parse_qs(urlparse(link).query)
+                        t = (q.get('url') or [None])[0]
+                        if t:
+                            url = normalize_url(t)
+                    else:
+                        # For direct links, just normalize - NO HTTP requests
+                        url = normalize_url(link)
+                except Exception as ex:
+                    logger.debug("url_parse_error", extra={"error": str(ex), "link": link[:100]})
+                    try:
+                        url = normalize_url(link)
+                    except Exception:
+                        continue
+                
+                if not url:
+                    continue
+                
+                title = e.get("title")
+                source_name = None
+                if "source" in e and hasattr(e.source, "title"):
+                    source_name = e.source.title
+                # Parse published date with timeout protection
+                try:
+                    published = parse_published(e.get("published") or e.get("updated"))
+                except Exception:
+                    published = None
+                items.append(
+                    {
+                        "url": url,
+                        "title": title,
+                        "source_name": source_name,
+                        "published": published,
+                    }
+                )
+                # Progress update every 10 entries
+                if entry_count % 10 == 0:
+                    progress.phase('fetch', f'Processing entries ({entry_count}/{min(len(parsed.entries), max_entries_per_feed)}...)')
+            logger.info("feed_done", extra={"feed_index": i, "items_collected": len(items)})
+        
+        logger.info("feeds_processing_done", extra={"items_count": len(items)})
+        
+        # Deduplicate by URL (normalized)
+        progress.phase('fetch', 'Deduplicating candidates')
+        logger.info("dedup_start", extra={"items": len(items)})
+        uniq: Dict[str, Dict] = {}
+        for it in items:
+            try:
+                key = normalize_url(it["url"])
+                if key and key not in uniq:
+                    it["url"] = key
+                    uniq[key] = it
+            except Exception as ex:
+                logger.debug("dedup_error", extra={"error": str(ex)})
+                continue
+        
+        out = list(uniq.values())
+        if len(out) > 60:
+            out = out[:60]
+        logger.info("feeds_parsed", extra={"candidates": len(out)})
+        progress.phase('fetch', f'Found {len(out)} candidates')
+        return out
+    except Exception as e:
+        logger.error("gather_candidates_failed", extra={"error": str(e)}, exc_info=True)
+        progress.phase('fetch', f'Error: {str(e)[:50]}')
+        return []
 
 
 def fetch_new_articles(min_count: int, location: str) -> List[Article]:
@@ -271,6 +337,7 @@ def fetch_new_articles(min_count: int, location: str) -> List[Article]:
                 location=location,
                 raw_content=content,
                 image_url=image_url,
+                is_published=True,
             )
             session.add(art)
             session.commit()

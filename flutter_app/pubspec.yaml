@@ -29,6 +29,9 @@ dependencies:
   # URL Launcher
   url_launcher: ^6.2.2
   
+  # Sharing
+  share_plus: ^7.2.1
+  
   # Date Formatting
   intl: ^0.18.1
   

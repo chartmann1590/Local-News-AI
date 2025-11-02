@@ -234,6 +234,11 @@ class ApiService {
     await _delete('${Constants.articlesEndpoint}/$articleId/chat', screenContext: screenContext ?? 'ChatWidget');
   }
   
+  // Force rewrite article
+  static Future<void> forceRewriteArticle(int articleId, {String? screenContext}) async {
+    await _post('${Constants.articlesEndpoint}/$articleId/rewrite', body: {}, screenContext: screenContext ?? 'ArticleDetailScreen');
+  }
+  
   // TTS
   static Future<List<int>> getTtsArticle(int articleId, {String? voice}) async {
     final baseUrl = await getBaseUrl();

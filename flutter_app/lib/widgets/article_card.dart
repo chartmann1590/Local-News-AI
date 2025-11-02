@@ -3,6 +3,7 @@ import '../models/article.dart';
 import '../services/api_service.dart';
 import '../services/logger_service.dart';
 import 'package:intl/intl.dart';
+import 'package:share_plus/share_plus.dart';
 
 class ArticleCard extends StatefulWidget {
   final Article article;
@@ -23,6 +24,7 @@ class ArticleCard extends StatefulWidget {
 class _ArticleCardState extends State<ArticleCard> {
   bool? _isBookmarked;
   bool _bookmarkLoading = false;
+  bool _shareLoading = false;
   
   @override
   void initState() {
@@ -54,6 +56,38 @@ class _ArticleCardState extends State<ArticleCard> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to update bookmark: ${e.toString()}')),
         );
+      }
+    }
+  }
+  
+  Future<void> _shareArticle() async {
+    if (_shareLoading) return;
+    setState(() {
+      _shareLoading = true;
+    });
+    try {
+      final shareUrl = widget.article.sourceUrl ?? '';
+      final shareText = '${widget.article.displayTitle}\n\n'
+          '${widget.article.source != null ? 'Source: ${widget.article.source}\n' : ''}'
+          '${widget.article.preview}...\n\n'
+          '$shareUrl';
+      
+      await Share.share(
+        shareText,
+        subject: widget.article.displayTitle,
+      );
+    } catch (e) {
+      LoggerService().logError('ArticleCard', 'Share Article', e);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to share article: ${e.toString()}')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _shareLoading = false;
+        });
       }
     }
   }
@@ -118,6 +152,18 @@ class _ArticleCardState extends State<ArticleCard> {
                             color: Colors.grey[600],
                           ),
                         ),
+                      IconButton(
+                        icon: _shareLoading 
+                            ? const SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.share),
+                        onPressed: _shareLoading ? null : _shareArticle,
+                        tooltip: 'Share article',
+                        color: Colors.grey[600],
+                      ),
                       IconButton(
                         icon: Icon(
                           _isBookmarked == true ? Icons.star : Icons.star_border,

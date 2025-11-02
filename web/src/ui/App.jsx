@@ -346,12 +346,15 @@ function Weather({ weather, tts }) {
 }
 
 function ArticleCard({ a, tts, onBookmarkChange }) {
-  const preview = useMemo(() => (a.preview || (a.ai_body || '')).slice(0, 500), [a])
-  const hasMore = (a.ai_body || '').length > preview.length
+  const displayContent = a.ai_body || a.raw_content || ''
+  const preview = useMemo(() => (a.preview || displayContent).slice(0, 500), [a, displayContent])
+  const hasMore = displayContent.length > preview.length
   const [open, setOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
   const [isBookmarked, setIsBookmarked] = useState(a.is_bookmarked || false)
   const [bookmarkLoading, setBookmarkLoading] = useState(false)
+  const [shareLoading, setShareLoading] = useState(false)
+  const [rewriteLoading, setRewriteLoading] = useState(false)
 
   async function toggleBookmark() {
     setBookmarkLoading(true)
@@ -368,6 +371,81 @@ function ArticleCard({ a, tts, onBookmarkChange }) {
     }
   }
 
+  async function handleForceRewrite() {
+    setRewriteLoading(true)
+    try {
+      const res = await fetch(`/api/articles/${a.id}/rewrite`, { method: 'POST' })
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({}))
+        throw new Error(error.error || 'Failed to trigger rewrite')
+      }
+      // Refresh the article data after a delay to check for updates
+      setTimeout(() => {
+        window.location.reload()
+      }, 3000)
+    } catch (e) {
+      console.error('Force rewrite failed', e)
+      alert('Failed to trigger rewrite: ' + e.message)
+    } finally {
+      setRewriteLoading(false)
+    }
+  }
+
+  async function handleShare() {
+    setShareLoading(true)
+    try {
+      const shareUrl = a.source_url || window.location.href
+      const shareText = `${a.title}\n\n${a.source ? `Source: ${a.source}\n` : ''}${preview}...\n\n${shareUrl}`
+      
+      // Try Web Share API first (works on mobile and some desktop browsers)
+      if (navigator.share) {
+        try {
+          await navigator.share({
+            title: a.title,
+            text: shareText,
+            url: shareUrl,
+          })
+          return
+        } catch (e) {
+          // User cancelled or error occurred, fall back to clipboard
+          if (e.name !== 'AbortError') {
+            console.warn('Web Share API failed:', e)
+          } else {
+            // User cancelled, just return
+            return
+          }
+        }
+      }
+      
+      // Fallback: Copy to clipboard
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(shareText)
+        alert('Link copied to clipboard!')
+      } else {
+        // Last resort: open in new window or show text
+        const textArea = document.createElement('textarea')
+        textArea.value = shareText
+        textArea.style.position = 'fixed'
+        textArea.style.opacity = '0'
+        document.body.appendChild(textArea)
+        textArea.select()
+        try {
+          document.execCommand('copy')
+          alert('Link copied to clipboard!')
+        } catch (e) {
+          console.error('Failed to copy:', e)
+          alert('Please copy this link manually:\n\n' + shareUrl)
+        }
+        document.body.removeChild(textArea)
+      }
+    } catch (e) {
+      console.error('Share failed', e)
+      alert('Failed to share article. Please copy the link manually.')
+    } finally {
+      setShareLoading(false)
+    }
+  }
+
   return (
     <article className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200/60 dark:border-slate-700/60 overflow-hidden">
       {a.image_url && <img src={a.image_url} alt="" className="w-full h-44 object-cover"/>}
@@ -377,48 +455,73 @@ function ArticleCard({ a, tts, onBookmarkChange }) {
             <span>{a.published_at ? new Date(a.published_at).toLocaleString() : new Date(a.fetched_at).toLocaleString()}</span>
             {a.source && <span>• {a.source}</span>}
           </div>
-          <button 
-            onClick={toggleBookmark}
-            disabled={bookmarkLoading}
-            className={`ml-2 px-2 py-1 rounded-md text-lg transition-colors ${bookmarkLoading ? 'opacity-50' : ''} ${isBookmarked ? 'text-yellow-500 hover:text-yellow-600' : 'text-slate-400 hover:text-yellow-500'}`}
-            title={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}
-            aria-label={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}
-          >
-            {isBookmarked ? '⭐' : '☆'}
-          </button>
+          <div className="flex items-center gap-1">
+            <button 
+              onClick={handleShare}
+              disabled={shareLoading}
+              className={`px-2 py-1 rounded-md text-lg transition-colors ${shareLoading ? 'opacity-50' : 'text-slate-400 hover:text-blue-500'}`}
+              title="Share article"
+              aria-label="Share article"
+            >
+              📤
+            </button>
+            <button 
+              onClick={toggleBookmark}
+              disabled={bookmarkLoading}
+              className={`px-2 py-1 rounded-md text-lg transition-colors ${bookmarkLoading ? 'opacity-50' : ''} ${isBookmarked ? 'text-yellow-500 hover:text-yellow-600' : 'text-slate-400 hover:text-yellow-500'}`}
+              title={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}
+              aria-label={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}
+            >
+              {isBookmarked ? '⭐' : '☆'}
+            </button>
+          </div>
         </div>
         <h2 className="text-xl font-semibold mb-1 flex items-center gap-2">{a.title}{a.rewrite_note && (<span className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">{a.rewrite_note}</span>)}</h2>
         {a.byline && <div className="text-xs text-slate-500 mb-2">By {a.byline}</div>}
         <div className="text-slate-700 dark:text-slate-300 leading-relaxed">
-          {a.ai_body ? (
+          {displayContent ? (
             <>
+              {!a.ai_body && a.raw_content && (
+                <div className="mb-2 text-xs text-amber-600 dark:text-amber-400 italic">
+                  Showing original content (AI rewrite pending or unavailable)
+                </div>
+              )}
               {!open && <div className="mb-2">{preview}{hasMore && '…'}</div>}
               {hasMore && (
                 <button onClick={() => setOpen(v => !v)} className="text-blue-600 hover:underline">
                   {open ? 'Hide' : 'Read more'}
                 </button>
               )}
-              {open && <div className="mt-2" dangerouslySetInnerHTML={{__html: (a.ai_body || '').replaceAll('\n','<br/>')}} />}
+              {open && <div className="mt-2" dangerouslySetInnerHTML={{__html: displayContent.replaceAll('\n','<br/>')}} />}
             </>
           ) : (
-            <div className="italic text-slate-500">AI rewrite pending…</div>
+            <div className="italic text-slate-500">No content available</div>
           )}
         </div>
         <div className="mt-3 text-sm">
           <a href={a.source_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">Source: View original article</a>
         </div>
-        {tts?.enabled && a?.ai_body && (
+        {tts?.enabled && (a?.ai_body || a?.raw_content) && (
           <div className="mt-3">
             <AudioPlayer fetchUrl={`/api/tts/article/${a.id}?${tts?.voice ? ('voice='+encodeURIComponent(tts.voice)+'&') : ''}ts=${encodeURIComponent(a.fetched_at||'')}`} />
           </div>
         )}
-        {a?.ai_body && (
-          <div className="mt-3 flex items-center gap-2">
+        <div className="mt-3 flex items-center gap-2 flex-wrap">
+          {(!a?.ai_body || (a?.ai_model || '').startsWith('fallback:')) && (
+            <button 
+              onClick={handleForceRewrite} 
+              disabled={rewriteLoading}
+              className="px-3 py-1.5 rounded-md border border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-sm hover:bg-blue-100 dark:hover:bg-blue-900/50 disabled:opacity-50"
+            >
+              {rewriteLoading ? 'Rewriting…' : 'Force Rewrite'}
+            </button>
+          )}
+          {a?.ai_body && (
             <button onClick={() => setChatOpen(v=>!v)} className="px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50">
               {chatOpen ? 'Hide Comments' : 'Comments'}
             </button>
-          </div>
-        )}
+          )}
+        </div>
         {chatOpen && (
           <div className="mt-3">
             <ArticleChat articleId={a.id} initialAuthor={a.byline || 'Local Desk'} />
@@ -684,6 +787,29 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ location: name })
       })
+      // Wait for background weather update to complete (weather update + AI generation)
+      // Poll weather endpoint until coordinates match the new location (up to 15 seconds)
+      const startTime = Date.now()
+      const maxWait = 15000 // 15 seconds max
+      let weatherUpdated = false
+      while (Date.now() - startTime < maxWait && !weatherUpdated) {
+        await new Promise(resolve => setTimeout(resolve, 1000)) // Wait 1 second between checks
+        try {
+          const [weatherRes, configRes] = await Promise.all([
+            fetch('/api/weather').then(r => r.json()),
+            fetch('/api/config').then(r => r.json())
+          ])
+          // Check if weather coordinates match config coordinates (within 0.01 degree tolerance)
+          if (weatherRes.latitude && weatherRes.longitude && 
+              configRes.latitude && configRes.longitude &&
+              Math.abs(weatherRes.latitude - configRes.latitude) < 0.01 &&
+              Math.abs(weatherRes.longitude - configRes.longitude) < 0.01) {
+            weatherUpdated = true
+          }
+        } catch (e) {
+          // Ignore errors during polling, continue waiting
+        }
+      }
       await loadAll()
       // Optionally trigger a fetch immediately
       await onRunNow()

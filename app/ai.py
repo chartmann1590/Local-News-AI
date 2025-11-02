@@ -19,7 +19,12 @@ def _post_ollama(path: str, payload: Dict[str, Any], base_url: Optional[str] = N
     return resp.json()
 
 
+# Minimum timeout for article rewrites (3 minutes)
+MIN_REWRITE_TIMEOUT_S = 180
+
 def rewrite_article(content: str, source_title: str | None, location: str, *, base_url: Optional[str] = None, model: Optional[str] = None, timeout_s: int = 600) -> Optional[Dict[str, str]]:
+    # Ensure timeout is at least 3 minutes
+    timeout_s = max(timeout_s, MIN_REWRITE_TIMEOUT_S)
     if not content or len(content.strip()) < 100:
         return None
 
@@ -37,32 +42,41 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
         "Output strict JSON with keys: title (string), body (string), author (string)."
     )
 
+    # Use /api/chat for structured prompts with system/user messages
     payload = {
         "model": (model or DEFAULT_OLLAMA_MODEL),
-        "prompt": f"<SYSTEM>{system_prompt}</SYSTEM>\n<USER>{user_prompt}</USER>",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
         "stream": False,
         "options": {"temperature": 0.2},
         "format": "json",
     }
 
     try:
-        data = _post_ollama("/api/generate", payload, base_url=base_url, timeout_s=timeout_s)
-        # Ollama returns {'response': '...json...'} when format=json
-        response = data.get("response")
-        if isinstance(response, dict):
+        data = _post_ollama("/api/chat", payload, base_url=base_url, timeout_s=timeout_s)
+        # Ollama chat returns {'message': {'content': '...json...'}}
+        message = data.get("message", {})
+        response_content = message.get("content", "")
+        if isinstance(response_content, dict):
             return {
-                "title": response.get("title", ""),
-                "body": response.get("body", ""),
-                "author": response.get("author", ""),
+                "title": response_content.get("title", ""),
+                "body": response_content.get("body", ""),
+                "author": response_content.get("author", ""),
             }
-        elif isinstance(response, str):
-            obj = json.loads(response)
+        elif isinstance(response_content, str):
+            obj = json.loads(response_content)
             return {
                 "title": obj.get("title", ""),
                 "body": obj.get("body", ""),
                 "author": obj.get("author", ""),
             }
-    except Exception:
+    except Exception as e:
+        # Log the error for debugging
+        import logging
+        logger = logging.getLogger("app.ai")
+        logger.error(f"rewrite_article failed: {e}", exc_info=True)
         return None
     return None
 
@@ -89,19 +103,28 @@ def generate_weather_report(forecast: Dict[str, Any], location: str, *, base_url
         "Write 2-3 short paragraphs."
     )
 
+    # Use /api/chat for structured prompts
     payload = {
         "model": (model or DEFAULT_OLLAMA_MODEL),
-        "prompt": f"<SYSTEM>{system_prompt}</SYSTEM>\n<USER>{user_prompt}</USER>",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
         "stream": False,
         "options": {"temperature": 0.2},
     }
 
     try:
-        data = _post_ollama("/api/generate", payload, base_url=base_url, timeout_s=timeout_s)
-        response = data.get("response")
+        data = _post_ollama("/api/chat", payload, base_url=base_url, timeout_s=timeout_s)
+        message = data.get("message", {})
+        response = message.get("content", "")
         if isinstance(response, str):
             return response.strip()
-    except Exception:
+    except Exception as e:
+        # Log the error for debugging
+        import logging
+        logger = logging.getLogger("app.ai")
+        logger.error(f"generate_weather_report failed: {e}", exc_info=True)
         return None
     return None
 
@@ -171,17 +194,26 @@ def generate_article_comment(
         "User says: " + user_message.strip()
     )
 
+    # Use /api/chat for structured prompts
     payload = {
         "model": (model or DEFAULT_OLLAMA_MODEL),
-        "prompt": f"<SYSTEM>{system_prompt}</SYSTEM>\n<USER>{user_prompt}</USER>",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
         "stream": False,
         "options": {"temperature": 0.2},
     }
     try:
-        data = _post_ollama("/api/generate", payload, base_url=base_url, timeout_s=timeout_s)
-        response = data.get("response")
+        data = _post_ollama("/api/chat", payload, base_url=base_url, timeout_s=timeout_s)
+        message = data.get("message", {})
+        response = message.get("content", "")
         if isinstance(response, str):
             return response.strip()
-    except Exception:
+    except Exception as e:
+        # Log the error for debugging
+        import logging
+        logger = logging.getLogger("app.ai")
+        logger.error(f"generate_article_comment failed: {e}", exc_info=True)
         return None
     return None

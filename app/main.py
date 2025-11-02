@@ -15,6 +15,7 @@ import time
 
 from .database import init_db, SessionLocal
 from sqlalchemy import func, case, or_, and_
+from sqlalchemy.exc import OperationalError, DatabaseError
 from .models import Article, WeatherReport, AppConfig, AppSettings, TTSSettings, ChatMessage, MobileLog, Bookmark
 from .scheduler import start_scheduler, run_harvest_once, restart_scheduler
 from . import maintenance
@@ -86,6 +87,73 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger("app")
+
+
+def _db_operation_with_retry(operation, max_retries=3, retry_delay=1.0):
+    """
+    Execute a database operation with retry logic for I/O errors.
+    
+    Args:
+        operation: A callable that takes a session and returns a result
+        max_retries: Maximum number of retry attempts
+        retry_delay: Delay in seconds between retries
+        
+    Returns:
+        The result of the operation
+        
+    Raises:
+        The last exception if all retries fail
+    """
+    last_exception = None
+    
+    for attempt in range(max_retries):
+        session = SessionLocal()
+        try:
+            result = operation(session)
+            session.commit()
+            return result
+        except (OperationalError, DatabaseError) as e:
+            last_exception = e
+            error_str = str(e).lower()
+            
+            # Check if it's an I/O error that might be recoverable
+            if any(err in error_str for err in ["disk i/o", "database is locked", "database disk image is malformed"]):
+                logger.warning(f"Database I/O error on attempt {attempt + 1}/{max_retries}: {e}")
+                if attempt < max_retries - 1:
+                    try:
+                        session.rollback()
+                    except Exception:
+                        pass
+                    session.close()
+                    time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
+                    continue
+            # For other database errors, don't retry
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            session.close()
+            raise
+        except Exception as e:
+            # For non-database errors, don't retry
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            session.close()
+            raise
+        finally:
+            # Ensure session is closed if it wasn't already
+            try:
+                if session.is_active:
+                    session.close()
+            except Exception:
+                pass
+    
+    # If we get here, all retries failed
+    if last_exception:
+        raise last_exception
+    raise RuntimeError("Database operation failed after retries")
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -330,6 +398,30 @@ def _build_article_query(session: SessionLocal, q: Optional[str] = None, source:
     """Build article query with filters and sorting."""
     query = session.query(Article)
     
+    # Filter by current location and published status
+    try:
+        cfg = session.query(AppConfig).filter_by(id=1).one_or_none()
+        current_location = cfg.location_name if cfg else None
+        
+        if current_location:
+            # Show articles matching current location that are published
+            # Also show articles with no location for backward compatibility if published
+            query = query.filter(
+                and_(
+                    Article.is_published == True,
+                    or_(
+                        Article.location == current_location,
+                        Article.location.is_(None)
+                    )
+                )
+            )
+        else:
+            # If no location set, only show published articles (with or without location)
+            query = query.filter(Article.is_published == True)
+    except Exception:
+        # Fallback: only show published articles if there's an error
+        query = query.filter(Article.is_published == True)
+    
     # Search filter
     if q and q.strip():
         search_term = f"%{q.strip()}%"
@@ -400,6 +492,37 @@ def _build_article_query(session: SessionLocal, q: Optional[str] = None, source:
     return query
 
 
+def _update_article_visibility(new_location: str):
+    """Update article visibility based on location.
+    
+    Sets is_published=False for articles from other locations,
+    and is_published=True for articles matching the new location.
+    Articles with location=None are kept visible for backward compatibility.
+    """
+    session = SessionLocal()
+    try:
+        # Hide articles from other locations
+        session.query(Article).filter(
+            and_(
+                Article.location.isnot(None),
+                Article.location != new_location
+            )
+        ).update({Article.is_published: False}, synchronize_session=False)
+        
+        # Show articles for the new location
+        session.query(Article).filter(
+            Article.location == new_location
+        ).update({Article.is_published: True}, synchronize_session=False)
+        
+        session.commit()
+        logger.info("article_visibility_updated", extra={"location": new_location})
+    except Exception:
+        session.rollback()
+        logger.exception("article_visibility_update_failed")
+    finally:
+        session.close()
+
+
 def _article_to_dict(a: Article, session: Optional[SessionLocal] = None, check_bookmark: bool = False) -> dict:
     """Convert Article model to dict."""
     base_dt = a.published_at or a.fetched_at
@@ -417,8 +540,12 @@ def _article_to_dict(a: Article, session: Optional[SessionLocal] = None, check_b
         "sort_ts": sort_ts,
         "ai_model": a.ai_model,
         "ai_body": a.ai_body,
+        "raw_content": a.raw_content,
         "byline": _funny_author_for(a) if (a.ai_body and not (a.ai_model or "").startswith("fallback:")) else None,
-        "rewrite_note": ("Showing original text (AI unavailable)" if (a.ai_model or "").startswith("fallback:") else None),
+        "rewrite_note": (
+            "Warning: Article has not been rewritten yet. Original text shown." if (not a.ai_body and a.raw_content)
+            else ("Showing original text (AI unavailable)" if (a.ai_model or "").startswith("fallback:") else None)
+        ),
     }
     # Check if article is bookmarked if requested
     if check_bookmark and session:
@@ -465,17 +592,30 @@ def api_articles(page: int = 1, limit: int = 10, q: Optional[str] = None,
 @app.get("/api/articles/sources")
 def api_articles_sources():
     """Get list of unique article sources."""
-    session = SessionLocal()
     try:
-        sources = session.query(Article.source_name)\
-            .filter(Article.source_name.isnot(None))\
-            .distinct()\
-            .order_by(Article.source_name)\
-            .all()
-        source_list = [s[0] for s in sources if s[0]]
+        def get_sources(session):
+            sources = session.query(Article.source_name)\
+                .filter(Article.source_name.isnot(None))\
+                .distinct()\
+                .order_by(Article.source_name)\
+                .all()
+            return [s[0] for s in sources if s[0]]
+        
+        source_list = _db_operation_with_retry(get_sources)
         return {"sources": source_list}
-    finally:
-        session.close()
+    except (OperationalError, DatabaseError) as e:
+        logger.error(f"Database error in api_articles_sources: {e}", exc_info=True)
+        # Return empty list instead of 500 error to prevent frontend issues
+        return JSONResponse(
+            status_code=503,
+            content={"error": "database_unavailable", "sources": []}
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error in api_articles_sources: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "internal_error", "sources": []}
+        )
 
 
 @app.post("/api/articles/{article_id}/bookmark")
@@ -871,11 +1011,44 @@ def api_weather():
                     dt = dt.replace(tzinfo=timezone.utc)
                 updated_at = dt.isoformat()
         
+        # Prioritize AppConfig coordinates if location changed (check both location name and coordinates)
+        # This ensures radar updates immediately when location is changed, even before new WeatherReport is generated
+        if cfg and cfg.latitude is not None and cfg.longitude is not None:
+            # Check if WeatherReport location name matches current location
+            location_mismatch = False
+            if wr and wr.location and cfg.location_name:
+                # Location names don't match - location was changed
+                location_mismatch = wr.location.strip().lower() != cfg.location_name.strip().lower()
+            
+            # Check if WeatherReport coordinates differ from AppConfig (within 0.01 degree tolerance)
+            coord_mismatch = False
+            if wr and wr.latitude is not None and wr.longitude is not None:
+                lat_diff = abs(wr.latitude - cfg.latitude)
+                lon_diff = abs(wr.longitude - cfg.longitude)
+                coord_mismatch = lat_diff > 0.01 or lon_diff > 0.01
+            
+            # If location name or coordinates don't match, use AppConfig (location was changed)
+            if location_mismatch or coord_mismatch:
+                lat = cfg.latitude
+                lon = cfg.longitude
+            elif wr and wr.latitude is not None and wr.longitude is not None:
+                # Location matches - use WeatherReport coordinates (more recent data)
+                lat = wr.latitude
+                lon = wr.longitude
+            else:
+                # No WeatherReport coordinates - use AppConfig
+                lat = cfg.latitude
+                lon = cfg.longitude
+        else:
+            # No AppConfig coordinates - fall back to WeatherReport
+            lat = wr.latitude if wr and wr.latitude is not None else None
+            lon = wr.longitude if wr and wr.longitude is not None else None
+        
         result = {
             "location": (cfg.location_name if cfg else os.environ.get("LOCATION_NAME", "Local")),
             "timezone": tz_name,
-            "latitude": (cfg.latitude if cfg else None),
-            "longitude": (cfg.longitude if cfg else None),
+            "latitude": lat,
+            "longitude": lon,
             "report": (wr.ai_report if wr else None),
             "forecast": forecast,
             "updated_at": updated_at,
@@ -946,11 +1119,16 @@ async def api_set_location_new(payload: dict):
     if not name or not isinstance(name, str) or len(name.strip()) < 2:
         return JSONResponse(status_code=400, content={"error": "location string required"})
     cfg = set_location(name.strip())
+    
+    # Update article visibility for the new location
+    _update_article_visibility(cfg.location_name)
+    
     # Restart scheduler to use new timezone
     try:
         restart_scheduler()
     except Exception:
         logger.exception("scheduler_restart_failed_after_location_change")
+    
     def _bg_refresh():
         try:
             session = SessionLocal()
@@ -962,8 +1140,14 @@ async def api_set_location_new(payload: dict):
                 wind_speed_unit = aset.wind_speed_unit if aset and aset.wind_speed_unit else None
             finally:
                 session.close()
+            
+            # Update weather
             scheduler_mod.progress.phase('weather_fetch', 'Updating due to location change')
             scheduler_mod._gen_weather_report(cfg.location_name, base_url=base_url, model=model, temp_unit=temp_unit, wind_speed_unit=wind_speed_unit)
+            
+            # Fetch new articles for the new location
+            scheduler_mod.progress.phase('fetch', 'Fetching articles for new location')
+            scheduler_mod.run_harvest_once()
         except Exception:
             logger.exception("location_change_refresh_failed")
     threading.Thread(target=_bg_refresh, daemon=True).start()
@@ -978,11 +1162,17 @@ async def api_set_location_new(payload: dict):
 @app.post("/api/location/auto")
 def api_auto_location():
     cfg = auto_set_location()
+    
+    # Update article visibility for the new location
+    if cfg.location_name:
+        _update_article_visibility(cfg.location_name)
+    
     # Restart scheduler to use new timezone
     try:
         restart_scheduler()
     except Exception:
         logger.exception("scheduler_restart_failed_after_auto_location")
+    
     def _bg_refresh():
         try:
             session = SessionLocal()
@@ -994,8 +1184,14 @@ def api_auto_location():
                 wind_speed_unit = aset.wind_speed_unit if aset and aset.wind_speed_unit else None
             finally:
                 session.close()
+            
+            # Update weather
             scheduler_mod.progress.phase('weather_fetch', 'Updating due to auto location')
             scheduler_mod._gen_weather_report(cfg.location_name, base_url=base_url, model=model, temp_unit=temp_unit, wind_speed_unit=wind_speed_unit)
+            
+            # Fetch new articles for the new location
+            scheduler_mod.progress.phase('fetch', 'Fetching articles for new location')
+            scheduler_mod.run_harvest_once()
         except Exception:
             logger.exception("auto_location_refresh_failed")
     threading.Thread(target=_bg_refresh, daemon=True).start()
@@ -1006,11 +1202,17 @@ def api_get_settings():
     session = SessionLocal()
     try:
         s = session.query(AppSettings).filter_by(id=1).one_or_none()
+        # Initialize with defaults if not exists
+        if not s:
+            s = AppSettings(id=1, temp_unit='F', wind_speed_unit='mph')
+            session.add(s)
+            session.commit()
+        # Always return DB values - use defaults if not set by user
         return {
             "ollama_base_url": s.ollama_base_url if s else None,
             "ollama_model": s.ollama_model if s else None,
-            "temp_unit": s.temp_unit if s else "F",
-            "wind_speed_unit": s.wind_speed_unit if s else "mph",
+            "temp_unit": s.temp_unit if s.temp_unit else "F",
+            "wind_speed_unit": s.wind_speed_unit if s.wind_speed_unit else "mph",
         }
     finally:
         session.close()
@@ -1117,9 +1319,31 @@ def api_tts_get_settings():
     session = SessionLocal()
     try:
         s = session.query(TTSSettings).filter_by(id=1).one_or_none()
+        base_url = s.base_url if s and s.base_url else DEFAULT_TTS_BASE
+        
+        # Auto-enable TTS if service is available (even if currently disabled)
+        # Check if TTS service is reachable and has voices
+        try:
+            from .tts import TTSClient
+            client = TTSClient(base_url)
+            voices = client.list_voices()
+            if voices is not None and len(voices) > 0:
+                # TTS service is available with voices - enable it
+                if not s:
+                    s = TTSSettings(id=1, enabled=True, base_url=base_url)
+                else:
+                    s.enabled = True
+                session.merge(s)
+                session.commit()
+                enabled = True
+            else:
+                enabled = bool(s.enabled) if s else False
+        except Exception:
+            enabled = bool(s.enabled) if s else False
+        
         return {
-            "enabled": bool(s.enabled) if s else False,
-            "base_url": s.base_url if s and s.base_url else DEFAULT_TTS_BASE,
+            "enabled": bool(enabled) if enabled is not None else False,
+            "base_url": base_url,
             "voice": s.voice if s else None,
             "speed": s.speed if s and s.speed else 1.0,
         }
@@ -1194,9 +1418,12 @@ def api_tts_article(article_id: int, voice: Optional[str] = None):
         if not tset or not tset.enabled:
             return JSONResponse(status_code=400, content={"error": "tts not enabled"})
         a = session.query(Article).filter_by(id=article_id).one_or_none()
-        if not a or not a.ai_body:
-            return JSONResponse(status_code=404, content={"error": "article not found or empty"})
-        txt = a.ai_body
+        if not a:
+            return JSONResponse(status_code=404, content={"error": "article not found"})
+        # Use ai_body if available, otherwise fallback to raw_content
+        txt = a.ai_body or a.raw_content
+        if not txt:
+            return JSONResponse(status_code=404, content={"error": "article content is empty"})
         vv = voice or (tset.voice or None)
         base = tset.base_url or DEFAULT_TTS_BASE
     finally:
@@ -1282,6 +1509,100 @@ def api_maintenance_rewrite_missing(limit: int | None = None):
             logger.exception("maintenance_rewrite_missing_failed")
     threading.Thread(target=_bg, daemon=True).start()
     return {"status": "queued"}
+
+
+@app.post("/api/articles/{article_id}/rewrite")
+def api_article_rewrite(article_id: int):
+    """Force rewrite a specific article with retry logic (3 attempts, then fallback).
+    Starts immediately using the scheduler's rewrite mechanism for consistency.
+    """
+    session = SessionLocal()
+    try:
+        a = session.query(Article).filter_by(id=article_id).one_or_none()
+        if not a:
+            return JSONResponse(status_code=404, content={"error": "article not found"})
+        if not a.raw_content:
+            return JSONResponse(status_code=400, content={"error": "article has no raw content to rewrite"})
+    finally:
+        session.close()
+    
+    # Run rewrite immediately in background thread using scheduler's rewrite mechanism
+    def _bg():
+        session = SessionLocal()
+        try:
+            # Reload article to get fresh state
+            a = session.query(Article).filter_by(id=article_id).one_or_none()
+            if not a or not a.raw_content:
+                return
+            
+            # Load AI settings
+            aset = session.query(AppSettings).filter_by(id=1).one_or_none()
+            base_url = aset.ollama_base_url if aset and aset.ollama_base_url else None
+            model = aset.ollama_model if aset and aset.ollama_model else None
+            
+            # Use scheduler's rewrite mechanism with lock to avoid conflicts
+            # This ensures immediate start and proper progress tracking
+            with scheduler_mod.REWRITE_LOCK:
+                # Update progress to show we're rewriting this article
+                try:
+                    from urllib.parse import urlparse
+                    label = (a.source_title or urlparse(a.source_url or '').netloc or f'Article {article_id}').strip()
+                    label = (label[:80] + '…') if len(label) > 80 else label
+                    scheduler_mod.progress.phase('rewrite', f'Force rewriting: {label}')
+                except Exception:
+                    scheduler_mod.progress.phase('rewrite', f'Force rewriting article {article_id}')
+                
+                # Get location for rewrite
+                from .geo import resolve_location
+                cfg = resolve_location()
+                location = a.location or (cfg.location_name if cfg else "Local")
+                
+                # Retry up to 3 times, 10 minute timeout per attempt (minimum 3 minutes)
+                res = None
+                from .ai import rewrite_article
+                for attempt in range(3):
+                    if attempt > 0:
+                        scheduler_mod.progress.phase('rewrite', f'Retry {attempt + 1}/3: {label}')
+                    res = rewrite_article(a.raw_content, a.source_title, location, base_url=base_url, model=model, timeout_s=600)
+                    if res and (res.get("title") or res.get("body")):
+                        break
+                
+                # Save result or fallback
+                # Reload article in case it changed
+                a = session.query(Article).filter_by(id=article_id).one_or_none()
+                if not a:
+                    return
+                    
+                if res and (res.get("title") or res.get("body")):
+                    a.ai_title = (res.get("title") or a.source_title or "").strip()[:500]
+                    a.ai_body = (res.get("body") or "").strip()
+                    a.ai_model = (model or os.environ.get("OLLAMA_MODEL", "llama3.2"))
+                    a.ai_generated_at = datetime.utcnow()
+                    logger.info(f"article_{article_id}_rewrite_success")
+                else:
+                    # Fallback to source content
+                    a.ai_title = (a.source_title or "").strip()[:500]
+                    a.ai_body = (a.raw_content or "").strip()
+                    a.ai_model = "fallback:source"
+                    a.ai_generated_at = datetime.utcnow()
+                    logger.warning(f"article_{article_id}_rewrite_fallback")
+                
+                session.add(a)
+                session.commit()
+                
+                # Clear progress after completion
+                scheduler_mod.progress.finish()
+        except Exception:
+            logger.exception(f"article_rewrite_failed_{article_id}")
+            scheduler_mod.progress.finish()
+        finally:
+            session.close()
+    
+    # Start immediately - don't wait
+    thread = threading.Thread(target=_bg, daemon=True)
+    thread.start()
+    logger.info(f"article_{article_id}_rewrite_started")
+    return {"status": "started", "article_id": article_id}
 
 # SPA fallback for client-side routes (avoids 404/blank on refresh)
 @app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)

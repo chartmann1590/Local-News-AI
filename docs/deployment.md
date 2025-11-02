@@ -22,9 +22,10 @@ docker compose up -d --no-deps --force-recreate app
 
 ### TTS Service (OpenTTS)
 
-- The Compose file includes a TTS container (`synesthesiam/opentts`) for offline voices (Piper engine).
+- The Compose file includes a TTS container (`synesthesiam/opentts`) for offline voices (Piper, Coqui, and other engines).
 - The app reaches it at `http://tts:5500` on the internal Docker network (no host port is published by default).
 - Voice cache is stored under `./data/tts` to persist downloads between runs.
+- **Windows Docker Desktop:** The volume mount uses WSL path format (`/mnt/h/...`) to ensure proper persistence on Docker Desktop for Windows. Do not change this unless you're running on Linux natively.
 
 ## Environment Files
 

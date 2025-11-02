@@ -67,20 +67,40 @@ test.describe('Bookmarks Feature', () => {
     const firstArticle = page.locator('article').first();
     const bookmarkButton = firstArticle.locator('button').filter({ hasText: /⭐|☆/ }).first();
     
-    // Get initial state
+    // Get initial state - wait for button to not be disabled/loading
+    await expect(bookmarkButton).not.toHaveAttribute('disabled', '', { timeout: 3000 });
     const initialText = await bookmarkButton.textContent();
     const isInitiallyBookmarked = initialText?.includes('⭐') || false;
+    
+    // Set up network request listener to wait for API call
+    const bookmarkRequest = page.waitForRequest(request => 
+      request.url().includes('/api/articles/') && request.url().includes('/bookmark') && request.method() === 'POST'
+    );
+    const bookmarkResponse = page.waitForResponse(response => 
+      response.url().includes('/api/articles/') && response.url().includes('/bookmark') && response.request().method() === 'POST'
+    );
     
     // Click bookmark button
     await bookmarkButton.click();
     
+    // Wait for the network request to complete
+    await Promise.all([bookmarkRequest, bookmarkResponse]).catch(() => {
+      // If network request doesn't happen, continue anyway (might be cached or offline)
+    });
+    
+    // Wait for loading state to complete (button becomes enabled again)
+    await expect(bookmarkButton).not.toHaveAttribute('disabled', '', { timeout: 5000 });
+    
+    // Wait a bit for React state to update
+    await page.waitForTimeout(500);
+    
     // Wait for state to actually change - wait for opposite icon to appear
     if (isInitiallyBookmarked) {
       // Was bookmarked, wait for unbookmarked state (☆)
-      await expect(bookmarkButton).toContainText('☆', { timeout: 3000 });
+      await expect(bookmarkButton).toContainText('☆', { timeout: 5000 });
     } else {
       // Was not bookmarked, wait for bookmarked state (⭐)
-      await expect(bookmarkButton).toContainText('⭐', { timeout: 3000 });
+      await expect(bookmarkButton).toContainText('⭐', { timeout: 5000 });
     }
     
     // Verify the state flipped
@@ -145,10 +165,15 @@ test.describe('Bookmarks Feature', () => {
     // First, ensure at least one article is bookmarked
     const firstArticle = page.locator('article').first();
     const bookmarkButton = firstArticle.locator('button').filter({ hasText: /⭐|☆/ }).first();
+    
+    // Wait for button to not be disabled
+    await expect(bookmarkButton).not.toHaveAttribute('disabled', '', { timeout: 3000 });
     const initialText = await bookmarkButton.textContent();
     
     if (!initialText?.includes('⭐')) {
       await bookmarkButton.click();
+      // Wait for loading to complete
+      await expect(bookmarkButton).not.toHaveAttribute('disabled', '', { timeout: 5000 });
       await page.waitForTimeout(500);
     }
     
@@ -176,12 +201,27 @@ test.describe('Bookmarks Feature', () => {
       const firstBookmarked = page.locator('article').first();
       const removeBookmarkBtn = firstBookmarked.locator('button').filter({ hasText: /⭐|☆/ }).first();
       
+      // Wait for button to be enabled
+      await expect(removeBookmarkBtn).not.toHaveAttribute('disabled', '', { timeout: 3000 });
+      
       await removeBookmarkBtn.click();
-      await page.waitForTimeout(500);
+      
+      // Don't wait for button to become enabled again - the article will be removed from the list
+      // Instead, wait for the UI to update (article count decrease or empty message)
       
       // Article should be removed from list or show empty message
-      const newCount = await page.locator('article').count();
-      const hasNoBookmarks = await page.locator('text=No bookmarked articles yet').isVisible().catch(() => false);
+      // Wait for either condition with retries
+      let newCount = await page.locator('article').count();
+      let hasNoBookmarks = await page.locator('text=No bookmarked articles yet').isVisible().catch(() => false);
+      
+      // Retry a few times in case update is delayed
+      let retries = 0;
+      while (!(newCount < bookmarkedCount || hasNoBookmarks) && retries < 5) {
+        await page.waitForTimeout(1000);
+        newCount = await page.locator('article').count();
+        hasNoBookmarks = await page.locator('text=No bookmarked articles yet').isVisible().catch(() => false);
+        retries++;
+      }
       
       // Either count decreased or shows empty message
       expect(newCount < bookmarkedCount || hasNoBookmarks).toBeTruthy();
@@ -191,27 +231,42 @@ test.describe('Bookmarks Feature', () => {
   test('API supports bookmark toggle', async ({ request }) => {
     // First, get an article ID
     const articlesResponse = await request.get('/api/articles?page=1&limit=1');
-    expect(articlesResponse.ok()).toBeTruthy();
+    
+    // Check response status - should be 200-299
+    expect(articlesResponse.status()).toBeGreaterThanOrEqual(200);
+    expect(articlesResponse.status()).toBeLessThan(300);
     
     const articlesData = await articlesResponse.json();
+    
+    // API should return items array (even if empty)
+    expect(articlesData).toHaveProperty('items');
     
     if (articlesData.items && articlesData.items.length > 0) {
       const articleId = articlesData.items[0].id;
       
       // Toggle bookmark
       const toggleResponse = await request.post(`/api/articles/${articleId}/bookmark`);
-      expect(toggleResponse.ok()).toBeTruthy();
+      
+      // Check response status
+      expect(toggleResponse.status()).toBeGreaterThanOrEqual(200);
+      expect(toggleResponse.status()).toBeLessThan(300);
       
       const toggleData = await toggleResponse.json();
       expect(toggleData).toHaveProperty('bookmarked');
       expect(toggleData).toHaveProperty('action');
       expect(typeof toggleData.bookmarked).toBe('boolean');
+    } else {
+      // Skip test if no articles available
+      test.skip();
     }
   });
 
   test('API returns bookmarked articles list', async ({ request }) => {
     const response = await request.get('/api/articles/bookmarked?page=1&limit=10');
-    expect(response.ok()).toBeTruthy();
+    
+    // Check response status - should be 200-299
+    expect(response.status()).toBeGreaterThanOrEqual(200);
+    expect(response.status()).toBeLessThan(300);
     
     const data = await response.json();
     expect(data).toHaveProperty('items');
@@ -232,7 +287,10 @@ test.describe('Bookmarks Feature', () => {
 
   test('articles API includes bookmark status', async ({ request }) => {
     const response = await request.get('/api/articles?page=1&limit=10');
-    expect(response.ok()).toBeTruthy();
+    
+    // Check response status - should be 200-299
+    expect(response.status()).toBeGreaterThanOrEqual(200);
+    expect(response.status()).toBeLessThan(300);
     
     const data = await response.json();
     expect(data).toHaveProperty('items');

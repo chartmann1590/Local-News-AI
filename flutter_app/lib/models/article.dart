@@ -13,6 +13,7 @@ class Article {
   final String? byline;
   final String? sourceTitle;
   final bool? isBookmarked;
+  final String? rawContent;
   
   Article({
     required this.id,
@@ -29,6 +30,7 @@ class Article {
     this.byline,
     this.sourceTitle,
     this.isBookmarked,
+    this.rawContent,
   });
   
   factory Article.fromJson(Map<String, dynamic> json) {
@@ -47,14 +49,16 @@ class Article {
       byline: json['byline'] as String?,
       sourceTitle: json['source_title'] as String?,
       isBookmarked: json['is_bookmarked'] as bool?,
+      rawContent: json['raw_content'] as String?,
     );
   }
   
   String get displayTitle => title;
-  String get preview => (aiBody ?? '').length > 500 
-    ? (aiBody?.substring(0, 500) ?? '')
-    : (aiBody ?? '');
-  bool get hasMore => (aiBody ?? '').length > 500;
+  String get displayContent => aiBody ?? rawContent ?? '';
+  String get preview => displayContent.length > 500 
+    ? displayContent.substring(0, 500)
+    : displayContent;
+  bool get hasMore => displayContent.length > 500;
 }
 
 

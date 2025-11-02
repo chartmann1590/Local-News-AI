@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Location Persistence:** Fixed issue where location would be overwritten on container rebuild. User-set locations are now preserved and never changed unless explicitly modified by the user. (2025-11-01)
+- **Temperature/Wind Speed Units:** Fixed bug where temperature and wind speed units would default to Celsius and km/h instead of using user's database settings. Units now always respect user preferences. (2025-11-01)
+- **Radar Location Update:** Fixed radar not updating immediately when location is changed. Radar now uses correct coordinates immediately after location change. (2025-11-01)
+- **Geocoding Accuracy:** Improved geocoding to better match city/state combinations, preventing incorrect coordinates (e.g., preventing Virginia coordinates when setting New York locations). (2025-11-01)
+- **TTS Voice Persistence:** Fixed TTS container volume mount to properly persist voices (Coqui, Piper, etc.) between container rebuilds on Docker Desktop for Windows. (2025-11-01)
+- **Article Rewrite Reliability:** Fixed article rewrite process to ensure articles are always rewritten on scheduled runs, even if previous attempts failed. Articles missing rewrites are automatically included in the next rewrite cycle. (2025-11-01)
+- **APK Build Process:** Improved Flutter APK build to handle network failures gracefully, allowing Docker image to build successfully even when Gradle dependency downloads fail. (2025-11-01)
+- **Article Raw Content Warning:** Added warning display when articles show raw content, indicating they will be rewritten on the next scheduled run. (2025-11-01)
+
 ### Added
 
 - **Article Sharing:** Share articles from both the web and mobile apps. (2025-10-31)
@@ -17,9 +28,12 @@
 
 ### Changed
 
+- **TTS Timeout:** Increased timeout for TTS voice generation to 10 minutes to handle longer audio generation tasks. (2025-11-01)
+- **Geocoding:** Enhanced geocoding logic to parse and match state information more accurately, ensuring correct location coordinates are returned. (2025-11-01)
 - **Docker:** The `nginx` service now generates its own self-signed certificate and configuration, removing the need for pre-existing files. (2025-10-31)
-- **Flutter:** The `compileSdk` version has been set to 33 for better compatibility. (2025-10-31)
+- **Flutter:** The `compileSdk` version has been set to 34 for better compatibility. (2025-10-31)
 - **Web & Mobile:** The article view now shows the original content if an AI rewrite is not yet available. (2025-10-31)
+- **Web:** The app now waits for weather data to update after a location change. (2025-10-31)
 - **TTS Service:** The TTS service now supports all available OpenTTS engines, not just Piper. (2025-10-30)
 - **Weather Display:** The web UI now displays the weather's `updated_at` time in the location's timezone. (2025-10-30)
 - **Android Widgets:** Major improvements to the news and weather widgets, including better data handling, improved UI, and more detailed weather information. (2025-10-30)
@@ -30,6 +44,7 @@
 
 ### Fixed
 
+- **Location Auto-Resolution:** Location auto-detection now only runs when no user-set location exists in the database, preventing unwanted location changes. (2025-11-01)
 - **Playwright Tests:** The bookmarking tests have been made more robust to handle asynchronous operations and network delays. (2025-10-31)
 - **Database Migration:** A database migration has been added to automatically add the `wind_speed_unit` column to the `app_settings` table, ensuring smooth updates. (2025-10-30)
 - **Scheduler:** The scheduler now uses the location's timezone instead of UTC. (2025-10-30)

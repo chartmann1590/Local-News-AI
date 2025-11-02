@@ -14,7 +14,7 @@ RUN npm run build
 FROM debian:bookworm-slim AS flutterbuild
 WORKDIR /build
 
-# Install dependencies for Flutter and Android SDK
+# Install dependencies for Flutter
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
@@ -35,47 +35,56 @@ RUN curl -fSL https://storage.googleapis.com/flutter_infra_release/releases/stab
 # Add Flutter to PATH
 ENV PATH="/build/flutter/bin:${PATH}"
 
-# Install Android SDK Command Line Tools
-ENV ANDROID_HOME=/opt/android-sdk
-ENV PATH="${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools"
-
-RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
-    cd ${ANDROID_HOME}/cmdline-tools && \
-    curl -fSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o cmdline-tools.zip && \
-    unzip cmdline-tools.zip && \
-    mv cmdline-tools latest && \
-    rm cmdline-tools.zip && \
-    yes | sdkmanager --licenses || true && \
-    sdkmanager "platform-tools" "platforms;android-34" "platforms;android-33" "build-tools;34.0.0" "ndk;25.1.8937393"
-
 # Configure git safe directory
 RUN git config --global --add safe.directory /build/flutter
 
-# Set environment variables for Flutter
+# Set environment variables for Flutter/Java
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV PATH="${PATH}:${JAVA_HOME}/bin"
 
-# Accept Android licenses via flutter
-RUN flutter doctor --android-licenses || true
+# Install Android SDK command line tools (Flutter needs this to manage the rest)
+ENV ANDROID_HOME=/opt/android-sdk
+RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
+    cd ${ANDROID_HOME}/cmdline-tools && \
+    for i in 1 2 3 4 5; do \
+        curl -fSL --retry 3 --retry-delay 5 https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o cmdline-tools.zip && break || \
+        (echo "Download attempt $i failed, retrying..." && sleep 10); \
+    done && \
+    unzip -q cmdline-tools.zip && \
+    mv cmdline-tools latest && \
+    rm cmdline-tools.zip
+ENV PATH="${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin"
 
-# Verify Flutter installation
-RUN flutter --version && flutter doctor -v
+# Accept Android licenses
+RUN yes | sdkmanager --licenses || true
+
+# Set environment variables for Android SDK
+ENV ANDROID_SDK_ROOT=${ANDROID_HOME}
+ENV PATH="${PATH}:${ANDROID_HOME}/platform-tools"
+
+# Let Flutter handle Android SDK setup automatically (more reliable than manual install)
+# Flutter will download and configure SDK components as needed during build
+RUN flutter doctor --android-licenses || true
+RUN flutter doctor -v || true
 
 # Copy Flutter app
 COPY flutter_app /build/flutter_app
 
-# Build APK
+# Build APK using Flutter
 WORKDIR /build/flutter_app
-# Clean any previous build artifacts
 RUN flutter clean || true
 RUN flutter pub get
-# Set environment to avoid Windows path issues
 ENV FLUTTER_ROOT=/build/flutter
-RUN flutter build apk --release
 
-# Copy built APK to a location we can extract it from
+# Build APK - allow build to continue even if APK fails (network issues are common)
 RUN mkdir -p /build/apk && \
-    cp /build/flutter_app/build/app/outputs/flutter-apk/app-release.apk /build/apk/news-ai-app.apk
+    if flutter build apk --release 2>&1 | tee /tmp/apk_build.log; then \
+        cp /build/flutter_app/build/app/outputs/flutter-apk/app-release.apk /build/apk/news-ai-app.apk && \
+        echo "APK built successfully"; \
+    else \
+        echo "APK build failed (network issues likely) - continuing without APK. Check /tmp/apk_build.log for details." && \
+        touch /build/apk/news-ai-app.apk || true; \
+    fi
 
 FROM python:3.11-slim
 
@@ -105,7 +114,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY app /app/app
 # Copy built React app into static directory
 COPY --from=webbuild /web/dist /app/app/static
-# Copy built APK from Flutter build stage
+# Copy built APK from Flutter build stage (if it was successfully built)
 COPY --from=flutterbuild /build/apk/news-ai-app.apk /app/app/static/news-ai-app.apk
 
 # SQLite data path

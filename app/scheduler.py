@@ -75,10 +75,10 @@ def _rewrite_and_store(articles, *, base_url: str | None, model: str | None):
                     progress.phase('rewrite', f'Rewriting ({i}/{total}): {label}')
                 except Exception:
                     progress.phase('rewrite', f'Rewriting ({i}/{total})')
-                # Retry up to 3 times, 10 minute timeout per attempt
+                # Retry up to 3 times, 10 minute timeout per attempt (minimum 3 minutes enforced in rewrite_article)
                 res = None
                 for _attempt in range(3):
-                    res = rewrite_article(art.raw_content, art.source_title, art.location or _location(), base_url=base_url, model=model, timeout_s=600)
+                    res = rewrite_article(art.raw_content, art.source_title, art.location or _location(), base_url=base_url, model=model, timeout_s=600)  # 600s = 10 min, minimum 3 min enforced
                     if res and (res.get("title") or res.get("body")):
                         break
                 if res and (res.get("title") or res.get("body")):
@@ -162,22 +162,44 @@ def run_harvest_once():
     progress.phase('fetch', 'Fetching news sources')
     # Fetch new raw articles
     new_arts = fetch_new_articles(min_count=count, location=location)
-    # Rewrite via Ollama
-    progress.phase('rewrite', f'Rewriting articles')
-    progress.set_rewrite_total(len(new_arts) if new_arts else 0)
     # Load AI settings
     session = SessionLocal()
     try:
         aset = session.query(AppSettings).filter_by(id=1).one_or_none()
-        base_url = (aset.ollama_base_url if aset and aset.ollama_base_url else os.environ.get("OLLAMA_BASE_URL"))
-        model = (aset.ollama_model if aset and aset.ollama_model else os.environ.get("OLLAMA_MODEL"))
-        temp_unit = (aset.temp_unit if aset and aset.temp_unit else None)
-        wind_speed_unit = (aset.wind_speed_unit if aset and aset.wind_speed_unit else None)
+        # Initialize AppSettings with defaults if it doesn't exist
+        if not aset:
+            aset = AppSettings(id=1, temp_unit='F', wind_speed_unit='mph')
+            session.add(aset)
+            session.commit()
+        # Always use DB values - never default to None which would cause C/kmh defaults
+        # If user hasn't set them yet, use the initialized defaults
+        temp_unit = aset.temp_unit if aset.temp_unit else 'F'
+        wind_speed_unit = aset.wind_speed_unit if aset.wind_speed_unit else 'mph'
+        base_url = (aset.ollama_base_url if aset.ollama_base_url else os.environ.get("OLLAMA_BASE_URL"))
+        model = (aset.ollama_model if aset.ollama_model else os.environ.get("OLLAMA_MODEL"))
+        
+        # Query for existing articles that need rewriting (missing ai_body or using fallback model)
+        # This ensures failed rewrites get retried on every scheduled run
+        existing_needing_rewrite = session.query(Article).filter(
+            Article.raw_content.isnot(None),
+            (Article.ai_body.is_(None) | Article.ai_model.like("fallback:%"))
+        ).all()
+        
+        # Combine new articles with existing articles needing rewrites
+        all_articles_to_rewrite = list(new_arts) if new_arts else []
+        all_articles_to_rewrite.extend(existing_needing_rewrite)
+        
+        total_to_rewrite = len(all_articles_to_rewrite)
+        logger.info("articles_to_rewrite", extra={"new": len(new_arts) if new_arts else 0, "existing_retry": len(existing_needing_rewrite), "total": total_to_rewrite})
     finally:
         session.close()
+    
+    # Rewrite via Ollama - includes both new articles and existing articles that need retry
+    progress.phase('rewrite', f'Rewriting articles')
+    progress.set_rewrite_total(total_to_rewrite)
     # Ensure only a single rewrite runs at a time
     with REWRITE_LOCK:
-        _rewrite_and_store(new_arts, base_url=base_url, model=model)
+        _rewrite_and_store(all_articles_to_rewrite, base_url=base_url, model=model)
     # Enforce deduplication after each run to eliminate lookalikes
     try:
         from .maintenance import purge_duplicate_articles
