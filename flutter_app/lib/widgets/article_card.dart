@@ -4,6 +4,7 @@ import '../services/api_service.dart';
 import '../services/logger_service.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
+import '../utils/date_formatter.dart';
 
 class ArticleCard extends StatefulWidget {
   final Article article;
@@ -93,13 +94,9 @@ class _ArticleCardState extends State<ArticleCard> {
   }
   
   String _formatDate(String? dateStr) {
-    if (dateStr == null) return '';
-    try {
-      final date = DateTime.parse(dateStr);
-      return DateFormat('MMM d, y • h:mm a').format(date);
-    } catch (e) {
-      return dateStr;
-    }
+    // Use the DateFormatter utility which handles timezone correctly
+    // The backend sends dates in location timezone
+    return DateFormatter.formatDateSync(dateStr, format: 'MMM d, y h:mm a');
   }
   
   @override

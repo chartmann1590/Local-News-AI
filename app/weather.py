@@ -9,6 +9,7 @@ import requests
 
 from .database import SessionLocal
 from .models import WeatherReport
+from .geo import get_local_now
 
 
 OPEN_METEO_GEOCODE = "https://geocoding-api.open-meteo.com/v1/search"
@@ -98,7 +99,7 @@ def update_weather(location: str, tz: str, ai_report: Optional[str] = None, lat:
             location=location,
             latitude=lat2,
             longitude=lon2,
-            fetched_at=datetime.utcnow(),
+            fetched_at=get_local_now(),
             forecast_json=json.dumps(forecast),
             ai_report=ai_report,
         )

@@ -50,7 +50,7 @@ class Article(Base):
     image_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: None)  # Set explicitly in creation code
 
     raw_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -68,7 +68,7 @@ class WeatherReport(Base):
     location: Mapped[str] = mapped_column(String(255), index=True)
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: None)  # Set explicitly in creation code
     forecast_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_report: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -82,7 +82,7 @@ class ChatMessage(Base):
     article_id: Mapped[int] = mapped_column(Integer, ForeignKey("articles.id"), index=True)
     role: Mapped[str] = mapped_column(String(10))  # 'user' or 'ai'
     content: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: None)  # Set explicitly in creation code
 
 
 class MobileLog(Base):
@@ -104,4 +104,17 @@ class Bookmark(Base):
     
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     article_id: Mapped[int] = mapped_column(Integer, ForeignKey("articles.id"), index=True, unique=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: None, index=True)  # Set explicitly in creation code
+
+
+class Broadcast(Base):
+    __tablename__ = "broadcasts"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: None, index=True)  # Set explicitly in creation code
+    transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+    video_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    audio_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    article_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    includes_weather: Mapped[bool] = mapped_column(Boolean, default=True)

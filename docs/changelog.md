@@ -15,6 +15,7 @@
 
 ### Added
 
+- **Broadcast Feature:** A new "Broadcast" feature has been added to the web app. (2025-11-01)
 - **Article Sharing:** Share articles from both the web and mobile apps. (2025-10-31)
 - **Force Rewrite:** Manually trigger an AI rewrite for an article from the article details screen. (2025-10-31)
 - **Article Bookmarking:** You can now bookmark articles in both the web and mobile apps. (2025-10-31)
@@ -45,7 +46,7 @@
 ### Fixed
 
 - **Location Auto-Resolution:** Location auto-detection now only runs when no user-set location exists in the database, preventing unwanted location changes. (2025-11-01)
-- **Playwright Tests:** The bookmarking tests have been made more robust to handle asynchronous operations and network delays. (2025-10-31)
+- **Playwright Tests:** The bookmarking and sharing tests have been made more robust to handle asynchronous operations and network delays. (2025-10-31)
 - **Database Migration:** A database migration has been added to automatically add the `wind_speed_unit` column to the `app_settings` table, ensuring smooth updates. (2025-10-30)
 - **Scheduler:** The scheduler now uses the location's timezone instead of UTC. (2025-10-30)
 - **Flutter:** Fixed config navigation, increased timeouts, added retries, and robust link launch. (2025-10-29)

@@ -6,9 +6,35 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 
 import requests
+import pytz
 
 from .database import SessionLocal
 from .models import AppConfig
+
+
+def get_local_now() -> datetime:
+    """Get current datetime in the location's timezone.
+    Always uses AppConfig.timezone, never UTC.
+    Falls back to America/New_York if config not available.
+    Reads directly from database to avoid circular dependencies.
+    """
+    try:
+        session = SessionLocal()
+        try:
+            cfg = session.query(AppConfig).filter_by(id=1).one_or_none()
+            tz_name = cfg.timezone if cfg and cfg.timezone else os.environ.get("TZ", "America/New_York")
+            tz = pytz.timezone(tz_name)
+            return datetime.now(tz)
+        finally:
+            session.close()
+    except Exception:
+        # Fallback to America/New_York if anything fails
+        try:
+            tz = pytz.timezone("America/New_York")
+            return datetime.now(tz)
+        except Exception:
+            # Last resort: use system local timezone
+            return datetime.now()
 
 
 def _env_location_override() -> Optional[str]:
@@ -135,7 +161,7 @@ def resolve_location() -> AppConfig:
             # Existing location found - preserve it completely, never overwrite
             # Only update resolved_at timestamp if it's missing
             if not cfg.resolved_at:
-                cfg.resolved_at = datetime.utcnow()
+                cfg.resolved_at = get_local_now()
                 session.merge(cfg)
                 session.commit()
             return cfg
@@ -195,7 +221,7 @@ def resolve_location() -> AppConfig:
             cfg.timezone = os.environ.get("TZ", "America/New_York")
             cfg.source = (cfg.source or "") + "+fallback"
 
-        cfg.resolved_at = datetime.utcnow()
+        cfg.resolved_at = get_local_now()
         session.merge(cfg)
         session.commit()
         try:
@@ -299,8 +325,7 @@ def set_location(name: str) -> AppConfig:
             cfg.location_name = name
             cfg.timezone = os.environ.get("TZ", "America/New_York")
             cfg.source = "manual"
-        from datetime import datetime
-        cfg.resolved_at = datetime.utcnow()
+        cfg.resolved_at = get_local_now()
         session.merge(cfg)
         session.commit()
         try:
@@ -353,8 +378,7 @@ def auto_set_location() -> AppConfig:
                     cfg.longitude = enriched.get("longitude")
                     cfg.timezone = cfg.timezone or enriched.get("timezone") or os.environ.get("TZ", "America/New_York")
                     cfg.source = (cfg.source or "") + "+openmeteo"
-        from datetime import datetime
-        cfg.resolved_at = datetime.utcnow()
+        cfg.resolved_at = get_local_now()
         session.merge(cfg)
         session.commit()
         return cfg

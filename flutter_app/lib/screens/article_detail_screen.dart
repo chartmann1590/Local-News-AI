@@ -7,6 +7,7 @@ import '../services/api_service.dart';
 import '../services/logger_service.dart';
 import '../widgets/audio_player_widget.dart';
 import '../widgets/chat_widget.dart';
+import '../utils/date_formatter.dart';
 import 'package:intl/intl.dart';
 
 class ArticleDetailScreen extends StatefulWidget {
@@ -31,6 +32,16 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     super.initState();
     LoggerService().logInfo('ArticleDetailScreen', 'Screen Initialized', details: 'Article ID: ${widget.article.id}');
     _checkTtsEnabled();
+    _prefetchTimezone();
+  }
+  
+  Future<void> _prefetchTimezone() async {
+    // Prefetch timezone from server so date formatting works correctly
+    try {
+      await ApiService.getConfig(screenContext: 'ArticleDetailScreen');
+    } catch (e) {
+      // Ignore errors - date formatter will handle fallback
+    }
   }
   
   Future<void> _checkTtsEnabled() async {
@@ -49,13 +60,9 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
   }
   
   String _formatDate(String? dateStr) {
-    if (dateStr == null) return '';
-    try {
-      final date = DateTime.parse(dateStr);
-      return DateFormat('MMMM d, y • h:mm a').format(date);
-    } catch (e) {
-      return dateStr;
-    }
+    // Use the DateFormatter utility which handles timezone correctly
+    // The backend sends dates in location timezone
+    return DateFormatter.formatDateSync(dateStr, format: 'MMMM d, y h:mm a');
   }
   
   Future<void> _openSourceUrl() async {

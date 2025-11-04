@@ -39,8 +39,18 @@ class _NewsScreenState extends State<NewsScreen> {
     LoggerService().logInfo('NewsScreen', 'Screen Initialized');
     _searchController.addListener(_onSearchChanged);
     _loadSources();
+    _prefetchTimezone();
     _loadArticles();
     _startAutoRefresh();
+  }
+  
+  Future<void> _prefetchTimezone() async {
+    // Prefetch timezone from server so date formatting works correctly
+    try {
+      await ApiService.getConfig(screenContext: 'NewsScreen');
+    } catch (e) {
+      // Ignore errors - date formatter will handle fallback
+    }
   }
   
   void _onSearchChanged() {

@@ -16,11 +16,11 @@ import time
 from .database import init_db, SessionLocal
 from sqlalchemy import func, case, or_, and_
 from sqlalchemy.exc import OperationalError, DatabaseError
-from .models import Article, WeatherReport, AppConfig, AppSettings, TTSSettings, ChatMessage, MobileLog, Bookmark
+from .models import Article, WeatherReport, AppConfig, AppSettings, TTSSettings, ChatMessage, MobileLog, Bookmark, Broadcast
 from .scheduler import start_scheduler, run_harvest_once, restart_scheduler
 from . import maintenance
 import threading
-from .geo import resolve_location, set_location, auto_set_location
+from .geo import resolve_location, set_location, auto_set_location, get_local_now
 from .progress import progress
 from . import scheduler as scheduler_mod
 from urllib.parse import urlparse, urlunparse
@@ -282,7 +282,7 @@ def on_startup():
 
 @app.get("/health")
 def health():
-    return {"ok": True, "time": datetime.utcnow().isoformat()}
+    return {"ok": True, "time": get_local_now().isoformat()}
 
 
 @app.get("/api/status")
@@ -525,9 +525,35 @@ def _update_article_visibility(new_location: str):
 
 def _article_to_dict(a: Article, session: Optional[SessionLocal] = None, check_bookmark: bool = False) -> dict:
     """Convert Article model to dict."""
-    base_dt = a.published_at or a.fetched_at
-    if base_dt is not None and base_dt.tzinfo is None:
-        base_dt = base_dt.replace(tzinfo=timezone.utc)
+    import pytz
+    
+    # Get location timezone for conversions
+    try:
+        cfg = session.query(AppConfig).filter_by(id=1).one_or_none() if session else None
+        if not cfg:
+            from .geo import resolve_location
+            cfg = resolve_location()
+        tz_name = cfg.timezone if cfg and cfg.timezone else os.environ.get("TZ", "America/New_York")
+        tz = pytz.timezone(tz_name)
+    except Exception:
+        tz = pytz.timezone("America/New_York")
+    
+    # Ensure timestamps are in location timezone
+    def _ensure_tz(dt: datetime | None) -> datetime | None:
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            # Naive datetime - assume it's already in location timezone, localize it
+            return tz.localize(dt)
+        elif dt.tzinfo.utcoffset(dt) != tz.utcoffset(dt):
+            # Different timezone - convert to location timezone
+            return dt.astimezone(tz)
+        return dt
+    
+    published_at_tz = _ensure_tz(a.published_at)
+    fetched_at_tz = _ensure_tz(a.fetched_at)
+    
+    base_dt = published_at_tz or fetched_at_tz
     sort_ts = int(base_dt.timestamp() * 1000) if base_dt else None
     result = {
         "id": a.id,
@@ -535,8 +561,8 @@ def _article_to_dict(a: Article, session: Optional[SessionLocal] = None, check_b
         "source": a.source_name,
         "source_url": a.source_url,
         "image_url": a.image_url,
-        "published_at": a.published_at.isoformat() if a.published_at else None,
-        "fetched_at": a.fetched_at.isoformat(),
+        "published_at": published_at_tz.isoformat() if published_at_tz else None,
+        "fetched_at": fetched_at_tz.isoformat(),
         "sort_ts": sort_ts,
         "ai_model": a.ai_model,
         "ai_body": a.ai_body,
@@ -639,7 +665,7 @@ def api_article_bookmark_toggle(article_id: int):
             return {"bookmarked": False, "action": "removed"}
         else:
             # Add bookmark
-            bookmark = Bookmark(article_id=article_id)
+            bookmark = Bookmark(article_id=article_id, created_at=get_local_now())
             session.add(bookmark)
             session.commit()
             logger.info("api:bookmark:added", extra={"article_id": article_id})
@@ -743,7 +769,7 @@ def api_article_chat(article_id: int, payload: dict, request: Request):
         cfg = session.query(AppConfig).filter_by(id=1).one_or_none()
         location = cfg.location_name if cfg else os.environ.get("LOCATION_NAME", "Local")
         # Persist user's message
-        um = ChatMessage(article_id=article_id, role="user", content=message)
+        um = ChatMessage(article_id=article_id, role="user", content=message, created_at=get_local_now())
         session.add(um)
         session.commit()
     finally:
@@ -789,7 +815,7 @@ def api_article_chat(article_id: int, payload: dict, request: Request):
     # Persist AI reply
     session = SessionLocal()
     try:
-        am = ChatMessage(article_id=article_id, role="ai", content=reply)
+        am = ChatMessage(article_id=article_id, role="ai", content=reply, created_at=get_local_now())
         session.add(am)
         session.commit()
     finally:
@@ -818,7 +844,7 @@ async def api_logs_upload(
         return JSONResponse(status_code=400, content={"error": "invalid_file_type"})
     # Storage path
     base = _ensure_logs_dir()
-    today = datetime.utcnow()
+    today = get_local_now()
     day_dir = os.path.join(base, f"{today.year:04d}", f"{today.month:02d}", f"{today.day:02d}")
     os.makedirs(day_dir, exist_ok=True)
     log_id = str(uuid.uuid4())
@@ -853,7 +879,7 @@ async def api_logs_upload(
             platform=(platform or "android")[:16],
             app_version=(appVersion or "")[:64],
             build_number=(buildNumber or "")[:32],
-            uploaded_at=datetime.utcnow(),
+            uploaded_at=get_local_now(),
             file_path=rel_path.replace("\\", "/"),
             file_size_bytes=int(size),
             sha256=digest,
@@ -1241,7 +1267,7 @@ def api_set_settings(payload: dict):
                 wind_unit_changed = (new_wind_unit != s.wind_speed_unit)
                 changed_unit = changed_unit or wind_unit_changed
                 s.wind_speed_unit = new_wind_unit
-        s.updated_at = datetime.utcnow()
+        s.updated_at = get_local_now()
         session.merge(s)
         session.commit()
     finally:
@@ -1487,6 +1513,176 @@ def api_tts_preview(payload: dict):
     return Response(content=wav, media_type="audio/wav")
 
 
+# ----- Broadcast endpoints -----
+
+@app.get("/api/broadcast/latest")
+def api_broadcast_latest():
+    """Get the most recent broadcast."""
+    session = SessionLocal()
+    try:
+        broadcast = (
+            session.query(Broadcast)
+            .order_by(Broadcast.created_at.desc())
+            .limit(1)
+            .one_or_none()
+        )
+        if not broadcast:
+            return JSONResponse(status_code=404, content={"error": "no broadcast found"})
+        
+        return {
+            "id": broadcast.id,
+            "created_at": broadcast.created_at.isoformat() if broadcast.created_at else None,
+            "transcript": broadcast.transcript,
+            "duration_seconds": broadcast.duration_seconds,
+            "article_count": broadcast.article_count,
+            "includes_weather": broadcast.includes_weather,
+        }
+    finally:
+        session.close()
+
+
+@app.get("/api/broadcast/{broadcast_id}")
+def api_broadcast_get(broadcast_id: int):
+    """Get a specific broadcast by ID."""
+    session = SessionLocal()
+    try:
+        broadcast = session.query(Broadcast).filter_by(id=broadcast_id).one_or_none()
+        if not broadcast:
+            return JSONResponse(status_code=404, content={"error": "broadcast not found"})
+        
+        return {
+            "id": broadcast.id,
+            "created_at": broadcast.created_at.isoformat() if broadcast.created_at else None,
+            "transcript": broadcast.transcript,
+            "duration_seconds": broadcast.duration_seconds,
+            "article_count": broadcast.article_count,
+            "includes_weather": broadcast.includes_weather,
+        }
+    finally:
+        session.close()
+
+
+@app.get("/api/broadcast/{broadcast_id}/video")
+def api_broadcast_video(broadcast_id: int):
+    """Stream the broadcast video file."""
+    session = SessionLocal()
+    try:
+        broadcast = session.query(Broadcast).filter_by(id=broadcast_id).one_or_none()
+        if not broadcast:
+            return JSONResponse(status_code=404, content={"error": "broadcast not found"})
+        
+        if not broadcast.video_path or not os.path.exists(broadcast.video_path):
+            return JSONResponse(status_code=404, content={"error": "video file not found"})
+        
+        return FileResponse(
+            broadcast.video_path,
+            media_type="video/mp4",
+            filename=f"broadcast_{broadcast_id}.mp4"
+        )
+    finally:
+        session.close()
+
+
+@app.get("/api/broadcast/{broadcast_id}/transcript")
+def api_broadcast_transcript(broadcast_id: int):
+    """Get the broadcast transcript."""
+    session = SessionLocal()
+    try:
+        broadcast = session.query(Broadcast).filter_by(id=broadcast_id).one_or_none()
+        if not broadcast:
+            return JSONResponse(status_code=404, content={"error": "broadcast not found"})
+        
+        return {
+            "id": broadcast.id,
+            "transcript": broadcast.transcript,
+        }
+    finally:
+        session.close()
+
+
+@app.post("/api/broadcast/regenerate")
+def api_broadcast_regenerate():
+    """Manually trigger broadcast regeneration."""
+    session = SessionLocal()
+    try:
+        # Load settings
+        aset = session.query(AppSettings).filter_by(id=1).one_or_none()
+        base_url = aset.ollama_base_url if aset and aset.ollama_base_url else None
+        model = aset.ollama_model if aset and aset.ollama_model else None
+        
+        # Get location
+        from .geo import resolve_location
+        try:
+            cfg = resolve_location()
+            location = cfg.location_name if cfg else None
+        except Exception:
+            location = None
+    finally:
+        session.close()
+    
+    # Run in background thread
+    def _bg():
+        try:
+            from .broadcast import generate_and_compile_broadcast
+            generate_and_compile_broadcast(
+                base_url=base_url,
+                model=model,
+                location=location,
+                force=True
+            )
+            logger.info("broadcast_regenerated")
+        except Exception:
+            logger.exception("broadcast_regenerate_failed")
+    
+    threading.Thread(target=_bg, daemon=True).start()
+    return {"status": "queued", "message": "Broadcast regeneration started"}
+
+
+@app.get("/api/broadcasts")
+def api_broadcasts(page: int = 1, limit: int = 10):
+    """List all broadcasts with pagination."""
+    session = SessionLocal()
+    try:
+        page = max(1, int(page or 1))
+        limit = max(1, min(100, int(limit or 10)))
+        
+        # Get total count
+        total = session.query(Broadcast).count()
+        pages = max(1, (total + limit - 1) // limit)
+        if page > pages:
+            page = pages
+        
+        # Apply pagination
+        offset = (page - 1) * limit
+        broadcasts = (
+            session.query(Broadcast)
+            .order_by(Broadcast.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        
+        items = []
+        for b in broadcasts:
+            items.append({
+                "id": b.id,
+                "created_at": b.created_at.isoformat() if b.created_at else None,
+                "duration_seconds": b.duration_seconds,
+                "article_count": b.article_count,
+                "includes_weather": b.includes_weather,
+            })
+        
+        return {
+            "items": items,
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "pages": pages,
+        }
+    finally:
+        session.close()
+
+
 # ----- Maintenance endpoints -----
 
 @app.post("/api/maintenance/dedup")
@@ -1577,14 +1773,14 @@ def api_article_rewrite(article_id: int):
                     a.ai_title = (res.get("title") or a.source_title or "").strip()[:500]
                     a.ai_body = (res.get("body") or "").strip()
                     a.ai_model = (model or os.environ.get("OLLAMA_MODEL", "llama3.2"))
-                    a.ai_generated_at = datetime.utcnow()
+                    a.ai_generated_at = get_local_now()
                     logger.info(f"article_{article_id}_rewrite_success")
                 else:
                     # Fallback to source content
                     a.ai_title = (a.source_title or "").strip()[:500]
                     a.ai_body = (a.raw_content or "").strip()
                     a.ai_model = "fallback:source"
-                    a.ai_generated_at = datetime.utcnow()
+                    a.ai_generated_at = get_local_now()
                     logger.warning(f"article_{article_id}_rewrite_fallback")
                 
                 session.add(a)

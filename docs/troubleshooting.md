@@ -50,4 +50,22 @@
 
 - **Location Changes on Rebuild:** Location should now persist between container rebuilds. If location keeps changing, ensure the database volume (`./data:/data`) is properly mounted.
 - **Wrong Coordinates:** If radar shows incorrect location despite setting it correctly, the geocoding has been improved to better match city/state combinations. Try setting the location again with the full city and state name (e.g., "Schenectady, New York").
-- **Radar Not Updating:** Radar now updates immediately when location is changed. If it doesn't update, refresh the page or check that the location was s
+- **Radar Not Updating:** Radar now updates immediately when location is changed. If it doesn't update, refresh the page or check that the location was successfully saved in Settings.
+
+## Unit Preferences
+
+- **Temperature/Wind Speed Units:** Units should always respect your settings. If they default to Celsius/kmh, ensure your preferences are saved in Settings. The database will initialize with Fahrenheit/mph defaults if no settings exist.
+
+## Article Rewrites
+
+- **Raw Content Showing:** Articles may temporarily show raw content if a rewrite hasn't completed yet. A warning will be displayed indicating the article will be rewritten on the next scheduled run.
+- **Rewrite Not Happening:** Rewrites run automatically on scheduled harvest cycles. Articles missing rewrites are automatically included in the next rewrite cycle. Check the scheduler logs to see if rewrites are running.
+
+## Theme toggle doesn’t change colors
+
+- The UI uses compiled Tailwind with class-based dark mode. If the theme icon changes but colors don’t:
+  - Hard refresh the page to clear cached CSS and service worker content.
+  - Ensure the `<html>` element has the `dark` class when dark mode is active (Developer Tools → Elements).
+  - Rebuild and recreate the app container to pick up CSS changes:
+    - `docker compose build app && docker compose up -d --no-deps --force-recreate app`
+  - If multiple clients are affected, consider bumping the cache name in `web/public/sw.js` and rebuilding to force a fresh cache.

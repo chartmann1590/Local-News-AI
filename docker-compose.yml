@@ -1,6 +1,9 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        BUILD_DATE: ${BUILD_DATE:-$(Get-Date -Format 'yyyy-MM-dd-HHmmss')}
     container_name: news-ai-app
     ports:
       - "18080:8000"

@@ -10,3 +10,31 @@ node_modules/
 data/*
 !data/.gitkeep
 
+# Flutter build artifacts and cache (but keep APK outputs)
+flutter_app/build/app/intermediates/
+flutter_app/build/app/generated/
+flutter_app/build/app/tmp/
+flutter_app/build/app/outputs/apk/debug/
+flutter_app/build/app/outputs/logs/
+flutter_app/build/app/outputs/mapping/
+flutter_app/build/app/outputs/native-debug-symbols/
+flutter_app/build/app/outputs/sdk-dependencies/
+flutter_app/build/audioplayers_android/
+flutter_app/build/native_assets/
+flutter_app/build/path_provider_android/
+flutter_app/build/shared_preferences_android/
+flutter_app/build/url_launcher_android/
+flutter_app/build/webview_flutter_android/
+flutter_app/.dart_tool/
+flutter_app/.flutter-plugins*
+flutter_app/.packages
+flutter_app/.pub-cache/
+flutter_app/.pub/
+flutter_app/android/.gradle/
+flutter_app/android/app/build/
+flutter_app/android/.idea/
+flutter_app/ios/Pods/
+flutter_app/ios/.symlinks/
+flutter_app/ios/Flutter/Flutter.framework
+flutter_app/ios/Flutter/Flutter.podspec
+

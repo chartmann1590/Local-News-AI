@@ -2,6 +2,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:timezone/data/latest_all.dart' as tzdata;
 import 'services/storage_service.dart';
 import 'services/theme_service.dart';
 import 'services/api_service.dart';
@@ -16,6 +17,9 @@ import 'models/article.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize timezone data for date formatting
+  tzdata.initializeTimeZones();
   
   // Initialize logging
   LoggerService().logInfo('App', 'Application Started', details: 'Version 1.0.0');

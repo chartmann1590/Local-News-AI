@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import AudioPlayer from './AudioPlayer.jsx'
 import { SkeletonCard } from './Skeleton.jsx'
+import Broadcast from './Broadcast.jsx'
 
 function SplashScreen({ show }) {
   if (!show) return null
@@ -345,7 +346,7 @@ function Weather({ weather, tts }) {
   )
 }
 
-function ArticleCard({ a, tts, onBookmarkChange }) {
+function ArticleCard({ a, tts, onBookmarkChange, timezone }) {
   const displayContent = a.ai_body || a.raw_content || ''
   const preview = useMemo(() => (a.preview || displayContent).slice(0, 500), [a, displayContent])
   const hasMore = displayContent.length > preview.length
@@ -355,6 +356,25 @@ function ArticleCard({ a, tts, onBookmarkChange }) {
   const [bookmarkLoading, setBookmarkLoading] = useState(false)
   const [shareLoading, setShareLoading] = useState(false)
   const [rewriteLoading, setRewriteLoading] = useState(false)
+  
+  // Format date in location timezone
+  function formatDate(dateStr) {
+    if (!dateStr) return ''
+    try {
+      const date = new Date(dateStr)
+      const options = {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        ...(timezone && { timeZone: timezone })
+      }
+      return date.toLocaleString('en-US', options)
+    } catch (e) {
+      return dateStr
+    }
+  }
 
   async function toggleBookmark() {
     setBookmarkLoading(true)
@@ -452,7 +472,7 @@ function ArticleCard({ a, tts, onBookmarkChange }) {
       <div className="p-5">
         <div className="flex items-start justify-between mb-2">
           <div className="text-xs text-slate-500 flex gap-3 flex-1">
-            <span>{a.published_at ? new Date(a.published_at).toLocaleString() : new Date(a.fetched_at).toLocaleString()}</span>
+            <span>{formatDate(a.published_at || a.fetched_at)}</span>
             {a.source && <span>• {a.source}</span>}
           </div>
           <div className="flex items-center gap-1">
@@ -629,6 +649,7 @@ export default function App() {
   const [bookmarkedArticles, setBookmarkedArticles] = useState([])
   const [bookmarksPage, setBookmarksPage] = useState(1)
   const [bookmarksPages, setBookmarksPages] = useState(1)
+  const [showBroadcast, setShowBroadcast] = useState(false)
 
   async function loadAll() {
     const t0 = performance.now()
@@ -829,6 +850,9 @@ export default function App() {
         <StatusBar status={status} timezone={config?.timezone} />
       </div>
       <div className="max-w-[1100px] mx-auto px-4 mt-2 flex items-center gap-2 flex-wrap">
+        <button onClick={()=>setShowBroadcast(v=>!v)} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm ${showBroadcast ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-800'}`}>
+          {showBroadcast ? '📺 Hide Broadcast' : '📺 Broadcast'}
+        </button>
         <button onClick={()=>setShowBookmarks(v=>!v)} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm ${showBookmarks ? 'bg-yellow-50 dark:bg-yellow-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-800'}`}>
           {showBookmarks ? '📚 Hide Bookmarks' : '⭐ Bookmarks'}
         </button>
@@ -879,9 +903,14 @@ export default function App() {
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} reloadAll={async () => { await loadAll(); await loadStatus(); }} />}
       <LocationBar config={config} onChange={changeLocation} />
       <main className="max-w-[1100px] mx-auto px-4 py-6">
-        <div className="grid md:grid-cols-3 gap-6">
-          <Weather weather={weather} tts={tts} />
-          <section className="md:col-span-2 space-y-4">
+        {showBroadcast ? (
+          <div className="space-y-4">
+            <Broadcast />
+          </div>
+        ) : (
+          <div className="grid md:grid-cols-3 gap-6">
+            <Weather weather={weather} tts={tts} />
+            <section className="md:col-span-2 space-y-4">
             {showBookmarks ? (
               <>
                 <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200/60 dark:border-slate-700/60">
@@ -898,7 +927,7 @@ export default function App() {
                   </div>
                 </div>
                 {bookmarkedArticles.length > 0 ? (
-                  bookmarkedArticles.map(a => <ArticleCard key={a.id} a={a} tts={tts} onBookmarkChange={(articleId, bookmarked) => {
+                  bookmarkedArticles.map(a => <ArticleCard key={a.id} a={a} tts={tts} timezone={config?.timezone} onBookmarkChange={(articleId, bookmarked) => {
                     if (!bookmarked) {
                       // Remove from bookmarks list
                       setBookmarkedArticles(prev => prev.filter(art => art.id !== articleId))
@@ -927,7 +956,7 @@ export default function App() {
                   </div>
                 </div>
                 {articles.length > 0 ? (
-                  articles.map(a => <ArticleCard key={a.id} a={a} tts={tts} onBookmarkChange={(articleId, bookmarked) => {
+                  articles.map(a => <ArticleCard key={a.id} a={a} tts={tts} timezone={config?.timezone} onBookmarkChange={(articleId, bookmarked) => {
                     // Update the article in the list
                     setArticles(prev => prev.map(art => art.id === articleId ? {...art, is_bookmarked: bookmarked} : art))
                   }} />)
@@ -1011,6 +1040,7 @@ export default function App() {
             )}
           </section>
         </div>
+        )}
       </main>
       <footer className="max-w-[1100px] mx-auto px-4 pb-12 text-sm text-slate-500">
         Built from free sources (RSS + Open‑Meteo). AI rewrites cite originals.

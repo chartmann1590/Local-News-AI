@@ -329,6 +329,7 @@ def fetch_new_articles(min_count: int, location: str) -> List[Article]:
             content, image_url = fetch_article_content(item["url"])
             if not content or len(content) < 120:
                 continue
+            from .geo import get_local_now
             art = Article(
                 source_url=item["url"],
                 source_title=item.get("title"),
@@ -337,6 +338,7 @@ def fetch_new_articles(min_count: int, location: str) -> List[Article]:
                 location=location,
                 raw_content=content,
                 image_url=image_url,
+                fetched_at=get_local_now(),
                 is_published=True,
             )
             session.add(art)

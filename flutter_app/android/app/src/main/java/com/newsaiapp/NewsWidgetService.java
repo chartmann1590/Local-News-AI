@@ -98,8 +98,15 @@ class NewsRemoteViewsFactory implements RemoteViewsService.RemoteViewsFactory {
                         }
                         newsItem.source = rawSource;
                         newsItem.imageUrl = item.optString("image_url", null);
-                        newsItem.publishedAt = item.optString("published_at", 
-                            item.optString("fetched_at", ""));
+                        // Try published_at first, then fetched_at, fallback to empty string
+                        String pubAt = item.optString("published_at", null);
+                        if (pubAt == null || pubAt.equalsIgnoreCase("null") || pubAt.isEmpty()) {
+                            pubAt = item.optString("fetched_at", null);
+                            if (pubAt == null || pubAt.equalsIgnoreCase("null") || pubAt.isEmpty()) {
+                                pubAt = "";
+                            }
+                        }
+                        newsItem.publishedAt = pubAt;
                         newsItems.add(newsItem);
                     }
                 }
@@ -162,15 +169,97 @@ class NewsRemoteViewsFactory implements RemoteViewsService.RemoteViewsFactory {
             views.setViewVisibility(R.id.news_source, android.view.View.GONE);
         }
         
-        // Format date if available
-        if (item.publishedAt != null && !item.publishedAt.isEmpty()) {
+        // Format date if available - check for null, empty, or literal "null" string
+        String dateStr = null;
+        if (item.publishedAt != null && !item.publishedAt.isEmpty() && !item.publishedAt.equalsIgnoreCase("null")) {
             try {
-                String dateStr = item.publishedAt.substring(0, Math.min(10, item.publishedAt.length()));
-                views.setTextViewText(R.id.news_date, dateStr);
-                views.setViewVisibility(R.id.news_date, android.view.View.VISIBLE);
+                // Try to parse ISO datetime string and format it with year and time
+                // Handle various ISO formats: "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-ddTHH:mm:ssZ", "yyyy-MM-ddTHH:mm:ss+00:00", etc.
+                java.util.Date date = null;
+                
+                // First, try parsing with ISO 8601 using Java 8+ time API if available, fallback to SimpleDateFormat
+                try {
+                    // Try to parse as ISO 8601 with timezone
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        try {
+                            java.time.Instant instant = java.time.Instant.parse(item.publishedAt);
+                            date = java.util.Date.from(instant);
+                        } catch (Exception e) {
+                            // If that fails, try with offset datetime
+                            try {
+                                java.time.OffsetDateTime odt = java.time.OffsetDateTime.parse(item.publishedAt);
+                                date = java.util.Date.from(odt.toInstant());
+                            } catch (Exception e2) {
+                                // Try with local datetime
+                                try {
+                                    java.time.LocalDateTime ldt = java.time.LocalDateTime.parse(item.publishedAt.substring(0, Math.min(19, item.publishedAt.length())));
+                                    java.time.ZonedDateTime zdt = ldt.atZone(java.time.ZoneId.systemDefault());
+                                    date = java.util.Date.from(zdt.toInstant());
+                                } catch (Exception e3) {
+                                    // Fall through to SimpleDateFormat parsing
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    // Continue to SimpleDateFormat parsing
+                }
+                
+                // Fallback to SimpleDateFormat if Java 8+ time API not available or parsing failed
+                if (date == null) {
+                    String[] isoFormats = {
+                        "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
+                        "yyyy-MM-dd'T'HH:mm:ssXXX",
+                        "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+                        "yyyy-MM-dd'T'HH:mm:ss'Z'",
+                        "yyyy-MM-dd'T'HH:mm:ss",
+                        "yyyy-MM-dd'T'HH:mm",
+                        "yyyy-MM-dd"
+                    };
+                    
+                    for (String format : isoFormats) {
+                        try {
+                            java.text.SimpleDateFormat inputFormat = new java.text.SimpleDateFormat(format, java.util.Locale.US);
+                            // Set timezone for UTC if 'Z' is present
+                            if (item.publishedAt.endsWith("Z") || format.contains("'Z'")) {
+                                inputFormat.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+                            }
+                            date = inputFormat.parse(item.publishedAt);
+                            break;
+                        } catch (Exception e) {
+                            // Try next format
+                            continue;
+                        }
+                    }
+                }
+                
+                if (date != null) {
+                    // Format as "MMM d, yyyy h:mm a" (e.g., "Jan 15, 2024 3:45 PM")
+                    java.text.SimpleDateFormat outputFormat = new java.text.SimpleDateFormat("MMM d, yyyy h:mm a", java.util.Locale.US);
+                    dateStr = outputFormat.format(date);
+                } else {
+                    // Fallback: try to extract at least date part
+                    if (item.publishedAt.length() >= 10) {
+                        try {
+                            java.text.SimpleDateFormat inputFormat = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US);
+                            java.util.Date dateOnly = inputFormat.parse(item.publishedAt.substring(0, 10));
+                            java.text.SimpleDateFormat outputFormat = new java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.US);
+                            dateStr = outputFormat.format(dateOnly);
+                        } catch (Exception e) {
+                            dateStr = item.publishedAt.substring(0, Math.min(16, item.publishedAt.length()));
+                        }
+                    } else {
+                        dateStr = item.publishedAt;
+                    }
+                }
             } catch (Exception e) {
-                views.setViewVisibility(R.id.news_date, android.view.View.GONE);
+                dateStr = null;
             }
+        }
+        
+        if (dateStr != null && !dateStr.isEmpty()) {
+            views.setTextViewText(R.id.news_date, dateStr);
+            views.setViewVisibility(R.id.news_date, android.view.View.VISIBLE);
         } else {
             views.setViewVisibility(R.id.news_date, android.view.View.GONE);
         }

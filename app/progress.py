@@ -29,14 +29,25 @@ class Progress:
         self._state = RunStatus()
 
     def _now(self, tz: str | None = None) -> str:
-        """Get current time as ISO string. If tz is provided, use that timezone, otherwise UTC."""
+        """Get current time as ISO string. If tz is provided, use that timezone, otherwise use location timezone."""
         if tz:
             try:
                 tz_obj = pytz.timezone(tz)
                 return datetime.now(tz_obj).isoformat()
             except Exception:
                 pass
-        return datetime.utcnow().isoformat()
+        # Fallback to location timezone instead of UTC
+        try:
+            from .geo import get_local_now
+            return get_local_now().isoformat()
+        except Exception:
+            # Last resort: use America/New_York timezone instead of UTC
+            try:
+                tz = pytz.timezone("America/New_York")
+                return datetime.now(tz).isoformat()
+            except Exception:
+                # Absolute last resort: use system local time
+                return datetime.now().isoformat()
     
     def _get_timezone(self) -> str | None:
         """Get the configured location timezone."""

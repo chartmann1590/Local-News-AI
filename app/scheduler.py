@@ -16,7 +16,7 @@ from .models import Article, WeatherReport, AppSettings
 from .news_fetcher import fetch_new_articles
 from .ai import rewrite_article, generate_weather_report
 from .weather import update_weather
-from .geo import resolve_location
+from .geo import resolve_location, get_local_now
 from .progress import progress
 
 logger = logging.getLogger("app.scheduler")
@@ -85,13 +85,13 @@ def _rewrite_and_store(articles, *, base_url: str | None, model: str | None):
                     art.ai_title = (res.get("title") or art.source_title or "").strip()[:500]
                     art.ai_body = (res.get("body") or "").strip()
                     art.ai_model = (model or os.environ.get("OLLAMA_MODEL", "llama3.2"))
-                    art.ai_generated_at = datetime.utcnow()
+                    art.ai_generated_at = get_local_now()
                 else:
                     # Fallback to source content
                     art.ai_title = (art.source_title or "").strip()[:500]
                     art.ai_body = (art.raw_content or "").strip()
                     art.ai_model = "fallback:source"
-                    art.ai_generated_at = datetime.utcnow()
+                    art.ai_generated_at = get_local_now()
                 session.add(art)
                 session.commit()
                 processed += 1
@@ -135,7 +135,7 @@ def _gen_weather_report(location: str, *, base_url: str | None, model: str | Non
         try:
             wr.ai_report = text
             wr.ai_model = (model or os.environ.get("OLLAMA_MODEL", "llama3.2"))
-            wr.ai_generated_at = datetime.utcnow()
+            wr.ai_generated_at = get_local_now()
             session.merge(wr)
             session.commit()
             logger.info("weather_report_generated", extra={"location": location})
@@ -147,7 +147,7 @@ def _gen_weather_report(location: str, *, base_url: str | None, model: str | Non
         try:
             wr.ai_report = "Weather report unavailable — showing raw forecast data."
             wr.ai_model = "fallback:forecast"
-            wr.ai_generated_at = datetime.utcnow()
+            wr.ai_generated_at = get_local_now()
             session.merge(wr)
             session.commit()
         finally:
@@ -208,6 +208,21 @@ def run_harvest_once():
         logger.exception("post_run_dedup_failed")
     # Update weather and generate report
     _gen_weather_report(location, base_url=base_url, model=model, temp_unit=temp_unit, wind_speed_unit=wind_speed_unit)
+    
+    # Generate broadcast after content updates
+    try:
+        from .broadcast import generate_and_compile_broadcast
+        progress.phase('broadcast', 'Generating news broadcast')
+        generate_and_compile_broadcast(
+            base_url=base_url,
+            model=model,
+            location=location,
+            force=False
+        )
+        logger.info("broadcast_generated", extra={"location": location})
+    except Exception:
+        logger.exception("broadcast_generation_failed")
+    
     logger.info("harvest_complete", extra={"location": location, "fetched": len(new_arts) if new_arts else 0})
     progress.finish()
 
