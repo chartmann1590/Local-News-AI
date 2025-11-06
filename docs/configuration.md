@@ -11,6 +11,8 @@ Set these in `docker-compose.yml` (or an `.env` file referenced by Compose):
 - `TZ` — Fallback timezone (the app prefers resolved location timezone).
 - `SCHEDULE_MORNING`, `SCHEDULE_NOON`, `SCHEDULE_EVENING` — `HH:MM` in local TZ.
 - `OLLAMA_BASE_URL` — Base URL for Ollama (default `http://host.docker.internal:11434`).
+- `OLLAMA_FALLBACK_BASE_URL` — Optional fallback Base URL for Ollama if the primary fails.
+- `OPENWEATHERMAP_API_KEY` — Your OpenWeatherMap API key for the weather map feature.
 - `TTS_BASE_URL` — Base URL for the TTS server used when no in-app setting is saved (default `http://tts:5500`). When using the provided Compose file, the built-in OpenTTS service is reachable at `http://tts:5500` from the app container.
 - `FEED_EXTRA_URLS` — Comma-separated RSS feed URLs to include in harvesting.
 - `LOG_LEVEL` — Logging level (`INFO`, `DEBUG`, etc.).
@@ -25,6 +27,7 @@ Data volume:
 ## In-App Settings
 
 - Ollama base URL — normalized for in-container access (e.g., converts `localhost` to `host.docker.internal`).
+- Ollama fallback base URL — Optional fallback Base URL for Ollama if the primary fails.
 - Ollama model — the model name/tag served by Ollama.
 - Units — °F or °C; changing this triggers a fresh forecast fetch + AI weather report.
 - Location — manual set or auto-detect; either triggers a fresh weather refresh.

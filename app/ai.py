@@ -4,6 +4,7 @@ import json
 import os
 import time
 from typing import Any, Dict, Optional
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 import requests
 
@@ -13,16 +14,32 @@ DEFAULT_OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 
 
 def _post_ollama(path: str, payload: Dict[str, Any], base_url: Optional[str] = None, timeout_s: int = 600) -> Dict[str, Any]:
+    """Post to Ollama API with enforced timeout using concurrent.futures."""
     url = f"{(base_url or DEFAULT_OLLAMA_BASE_URL)}{path}"
-    resp = requests.post(url, json=payload, timeout=timeout_s)
-    resp.raise_for_status()
-    return resp.json()
+    
+    def _make_request():
+        resp = requests.post(url, json=payload, timeout=timeout_s)
+        resp.raise_for_status()
+        return resp.json()
+    
+    # Use ThreadPoolExecutor to enforce timeout even if requests hangs
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_make_request)
+        try:
+            return future.result(timeout=timeout_s)
+        except FutureTimeoutError:
+            # Cancel the future if possible
+            future.cancel()
+            raise TimeoutError(f"Request to {url} exceeded timeout of {timeout_s} seconds")
+        except Exception as e:
+            # Re-raise other exceptions
+            raise
 
 
 # Minimum timeout for article rewrites (3 minutes)
 MIN_REWRITE_TIMEOUT_S = 180
 
-def rewrite_article(content: str, source_title: str | None, location: str, *, base_url: Optional[str] = None, model: Optional[str] = None, timeout_s: int = 600) -> Optional[Dict[str, str]]:
+def rewrite_article(content: str, source_title: str | None, location: str, *, base_url: Optional[str] = None, model: Optional[str] = None, fallback_base_url: Optional[str] = None, timeout_s: int = 600) -> Optional[Dict[str, str]]:
     # Ensure timeout is at least 3 minutes
     timeout_s = max(timeout_s, MIN_REWRITE_TIMEOUT_S)
     if not content or len(content.strip()) < 100:
@@ -54,8 +71,15 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
         "format": "json",
     }
 
+    import logging
+    logger = logging.getLogger("app.ai")
+    from .progress import progress
+
+    # Try primary server first
     try:
+        progress.set_timeout(timeout_s)
         data = _post_ollama("/api/chat", payload, base_url=base_url, timeout_s=timeout_s)
+        progress.clear_timeout()
         # Ollama chat returns {'message': {'content': '...json...'}}
         message = data.get("message", {})
         response_content = message.get("content", "")
@@ -66,16 +90,100 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
                 "author": response_content.get("author", ""),
             }
         elif isinstance(response_content, str):
-            obj = json.loads(response_content)
-            return {
-                "title": obj.get("title", ""),
-                "body": obj.get("body", ""),
-                "author": obj.get("author", ""),
-            }
+            # Clean up the response - sometimes Ollama includes markdown code blocks
+            content_clean = response_content.strip()
+            # Remove markdown code block markers if present
+            if content_clean.startswith("```json"):
+                content_clean = content_clean[7:]  # Remove ```json
+            elif content_clean.startswith("```"):
+                content_clean = content_clean[3:]  # Remove ```
+            if content_clean.endswith("```"):
+                content_clean = content_clean[:-3]  # Remove closing ```
+            content_clean = content_clean.strip()
+            
+            try:
+                obj = json.loads(content_clean)
+                return {
+                    "title": obj.get("title", ""),
+                    "body": obj.get("body", ""),
+                    "author": obj.get("author", ""),
+                }
+            except json.JSONDecodeError as json_err:
+                # Try to extract JSON from the response if it's embedded in text
+                import re
+                json_match = re.search(r'\{[^{}]*"title"[^{}]*\}', content_clean, re.DOTALL)
+                if json_match:
+                    try:
+                        obj = json.loads(json_match.group(0))
+                        return {
+                            "title": obj.get("title", ""),
+                            "body": obj.get("body", ""),
+                            "author": obj.get("author", ""),
+                        }
+                    except json.JSONDecodeError:
+                        pass
+                logger.warning(f"JSON parse error: {json_err}")
+                logger.debug(f"Response content (first 1000 chars): {content_clean[:1000]}")
+                raise  # Re-raise to trigger fallback
     except Exception as e:
+        progress.clear_timeout()
+        logger.warning(f"rewrite_article failed on primary server: {e}")
+        
+        # Try fallback server if available
+        if fallback_base_url:
+            try:
+                logger.info(f"Attempting rewrite with fallback server: {fallback_base_url}")
+                progress.set_timeout(timeout_s)
+                data = _post_ollama("/api/chat", payload, base_url=fallback_base_url, timeout_s=timeout_s)
+                progress.clear_timeout()
+                message = data.get("message", {})
+                response_content = message.get("content", "")
+                if isinstance(response_content, dict):
+                    return {
+                        "title": response_content.get("title", ""),
+                        "body": response_content.get("body", ""),
+                        "author": response_content.get("author", ""),
+                    }
+                elif isinstance(response_content, str):
+                    # Clean up the response - sometimes Ollama includes markdown code blocks
+                    content_clean = response_content.strip()
+                    # Remove markdown code block markers if present
+                    if content_clean.startswith("```json"):
+                        content_clean = content_clean[7:]  # Remove ```json
+                    elif content_clean.startswith("```"):
+                        content_clean = content_clean[3:]  # Remove ```
+                    if content_clean.endswith("```"):
+                        content_clean = content_clean[:-3]  # Remove closing ```
+                    content_clean = content_clean.strip()
+                    
+                    try:
+                        obj = json.loads(content_clean)
+                        return {
+                            "title": obj.get("title", ""),
+                            "body": obj.get("body", ""),
+                            "author": obj.get("author", ""),
+                        }
+                    except json.JSONDecodeError as json_err:
+                        # Try to extract JSON from the response if it's embedded in text
+                        import re
+                        json_match = re.search(r'\{[^{}]*"title"[^{}]*\}', content_clean, re.DOTALL)
+                        if json_match:
+                            try:
+                                obj = json.loads(json_match.group(0))
+                                return {
+                                    "title": obj.get("title", ""),
+                                    "body": obj.get("body", ""),
+                                    "author": obj.get("author", ""),
+                                }
+                            except json.JSONDecodeError:
+                                pass
+                        logger.warning(f"Fallback server JSON parse error: {json_err}")
+                        raise  # Re-raise to continue error handling
+            except Exception as e2:
+                progress.clear_timeout()
+                logger.error(f"rewrite_article failed on fallback server: {e2}", exc_info=True)
+        
         # Log the error for debugging
-        import logging
-        logger = logging.getLogger("app.ai")
         logger.error(f"rewrite_article failed: {e}", exc_info=True)
         return None
     return None

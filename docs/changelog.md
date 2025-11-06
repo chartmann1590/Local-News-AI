@@ -2,20 +2,9 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- **Location Persistence:** Fixed issue where location would be overwritten on container rebuild. User-set locations are now preserved and never changed unless explicitly modified by the user. (2025-11-01)
-- **Temperature/Wind Speed Units:** Fixed bug where temperature and wind speed units would default to Celsius and km/h instead of using user's database settings. Units now always respect user preferences. (2025-11-01)
-- **Radar Location Update:** Fixed radar not updating immediately when location is changed. Radar now uses correct coordinates immediately after location change. (2025-11-01)
-- **Geocoding Accuracy:** Improved geocoding to better match city/state combinations, preventing incorrect coordinates (e.g., preventing Virginia coordinates when setting New York locations). (2025-11-01)
-- **TTS Voice Persistence:** Fixed TTS container volume mount to properly persist voices (Coqui, Piper, etc.) between container rebuilds on Docker Desktop for Windows. (2025-11-01)
-- **Article Rewrite Reliability:** Fixed article rewrite process to ensure articles are always rewritten on scheduled runs, even if previous attempts failed. Articles missing rewrites are automatically included in the next rewrite cycle. (2025-11-01)
-- **APK Build Process:** Improved Flutter APK build to handle network failures gracefully, allowing Docker image to build successfully even when Gradle dependency downloads fail. (2025-11-01)
-- **Article Raw Content Warning:** Added warning display when articles show raw content, indicating they will be rewritten on the next scheduled run. (2025-11-01)
-
 ### Added
 
-- **Broadcast Feature:** A new "Broadcast" feature has been added to the web app. (2025-11-01)
+- **Broadcast Feature:** A new "Broadcast" feature has been added to the web app, which includes a caption overlay. (2025-11-01)
 - **Article Sharing:** Share articles from both the web and mobile apps. (2025-10-31)
 - **Force Rewrite:** Manually trigger an AI rewrite for an article from the article details screen. (2025-10-31)
 - **Article Bookmarking:** You can now bookmark articles in both the web and mobile apps. (2025-10-31)
@@ -29,6 +18,7 @@
 
 ### Changed
 
+- **Web UI:** The status bar now shows a countdown timer for rewrite and broadcast phases, and includes "Skip" and "Use Fallback" buttons during rewrites. (2025-11-01)
 - **TTS Timeout:** Increased timeout for TTS voice generation to 10 minutes to handle longer audio generation tasks. (2025-11-01)
 - **Geocoding:** Enhanced geocoding logic to parse and match state information more accurately, ensuring correct location coordinates are returned. (2025-11-01)
 - **Docker:** The `nginx` service now generates its own self-signed certificate and configuration, removing the need for pre-existing files. (2025-10-31)
@@ -45,6 +35,14 @@
 
 ### Fixed
 
+- **Location Persistence:** Fixed issue where location would be overwritten on container rebuild. User-set locations are now preserved and never changed unless explicitly modified by the user. (2025-11-01)
+- **Temperature/Wind Speed Units:** Fixed bug where temperature and wind speed units would default to Celsius and km/h instead of using user's database settings. Units now always respect user preferences. (2025-11-01)
+- **Radar Location Update:** Fixed radar not updating immediately when location is changed. Radar now uses correct coordinates immediately after location change. (2025-11-01)
+- **Geocoding Accuracy:** Improved geocoding to better match city/state combinations, preventing incorrect coordinates (e.g., preventing Virginia coordinates when setting New York locations). (2025-11-01)
+- **TTS Voice Persistence:** Fixed TTS container volume mount to properly persist voices (Coqui, Piper, etc.) between container rebuilds on Docker Desktop for Windows. (2025-11-01)
+- **Article Rewrite Reliability:** Fixed article rewrite process to ensure articles are always rewritten on scheduled runs, even if previous attempts failed. Articles missing rewrites are automatically included in the next rewrite cycle. (2025-11-01)
+- **APK Build Process:** Improved Flutter APK build to handle network failures gracefully, allowing Docker image to build successfully even when Gradle dependency downloads fail. (2025-11-01)
+- **Article Raw Content Warning:** Added warning display when articles show raw content, indicating they will be rewritten on the next scheduled run. (2025-11-01)
 - **Location Auto-Resolution:** Location auto-detection now only runs when no user-set location exists in the database, preventing unwanted location changes. (2025-11-01)
 - **Playwright Tests:** The bookmarking and sharing tests have been made more robust to handle asynchronous operations and network delays. (2025-10-31)
 - **Database Migration:** A database migration has been added to automatically add the `wind_speed_unit` column to the `app_settings` table, ensuring smooth updates. (2025-10-30)

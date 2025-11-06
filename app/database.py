@@ -67,6 +67,18 @@ def init_db():
             if "wind_speed_unit" not in columns:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN wind_speed_unit VARCHAR(10)"))
                 conn.commit()
+            # Migration: Add ollama_fallback_base_url column if it doesn't exist
+            if "ollama_fallback_base_url" not in columns:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN ollama_fallback_base_url VARCHAR(500)"))
+                conn.commit()
+            
+            # Migration: Add srt_path column to broadcasts table if it doesn't exist
+            result = conn.execute(text("PRAGMA table_info(broadcasts)"))
+            columns = [row[1] for row in result]
+            if "srt_path" not in columns:
+                conn.execute(text("ALTER TABLE broadcasts ADD COLUMN srt_path VARCHAR(1000)"))
+                conn.commit()
+                logger.info("Added srt_path column to broadcasts table")
     except Exception as e:
         logger.error(f"Database initialization failed: {e}", exc_info=True)
         raise

@@ -56,15 +56,20 @@ def _min_articles() -> int:
         return 10
 
 
-def _rewrite_and_store(articles, *, base_url: str | None, model: str | None):
+def _rewrite_and_store(articles, *, base_url: str | None, model: str | None, fallback_base_url: str | None = None):
     session = SessionLocal()
     try:
         processed = 0
         total = len(articles)
         for i, art in enumerate(articles, start=1):
-            # Rewrite when missing AI or previously fell back to source
+            # Merge article into current session to ensure it's persistent
+            # This handles cases where articles come from different sessions
+            art = session.merge(art)
+            
+            # Rewrite when missing AI, but NOT if it's a fallback or skipped article
+            # Fallback articles should be kept permanently, skipped articles can be retried later
             needs_rewrite = (art.raw_content is not None) and (
-                (not art.ai_body) or ((art.ai_model or "").startswith("fallback:"))
+                (not art.ai_body) and not ((art.ai_model or "").startswith("fallback:"))
             )
             if needs_rewrite:
                 # Update progress detail with current item
@@ -73,14 +78,161 @@ def _rewrite_and_store(articles, *, base_url: str | None, model: str | None):
                     label = (art.source_title or urlparse(art.source_url or '').netloc or 'article').strip()
                     label = (label[:80] + '…') if len(label) > 80 else label
                     progress.phase('rewrite', f'Rewriting ({i}/{total}): {label}')
+                    progress.set_current(art_id=art.id, title=art.source_title, url=art.source_url)
                 except Exception:
                     progress.phase('rewrite', f'Rewriting ({i}/{total})')
+                    progress.set_current(art_id=art.id, title=None, url=None)
+                
+                # Check if timeout is exceeded (stuck article) - auto-recover with fallback
+                if progress.is_timeout_exceeded():
+                    logger.warning(f"Article {art.id} appears stuck (timeout exceeded), applying fallback")
+                    art.ai_title = (art.source_title or "").strip()[:500]
+                    art.ai_body = (art.raw_content or "").strip()
+                    art.ai_model = "fallback:source"
+                    art.ai_generated_at = get_local_now()
+                    session.add(art)
+                    session.commit()
+                    processed += 1
+                    progress.inc_rewrite(1)
+                    progress.clear_timeout()  # Clear timeout tracking
+                    progress.clear_flags()
+                    continue
+                
+                # Check if skip was requested (verify it's for this article)
+                snapshot = progress.snapshot()
+                if snapshot.get('skip_current') and snapshot.get('current_id') == art.id:
+                    logger.info(f"Skipping article {art.id} per user request")
+                    progress.inc_rewrite(1)
+                    progress.clear_flags()  # Clear the flag after using it
+                    continue
+                
+                # Check if fallback was requested (verify it's for this article)
+                snapshot = progress.snapshot()
+                if snapshot.get('fallback_current') and snapshot.get('current_id') == art.id:
+                    logger.info(f"Using fallback for article {art.id} per user request")
+                    art.ai_title = (art.source_title or "").strip()[:500]
+                    art.ai_body = (art.raw_content or "").strip()
+                    art.ai_model = "fallback:source"
+                    art.ai_generated_at = get_local_now()
+                    session.add(art)
+                    session.commit()
+                    processed += 1
+                    progress.inc_rewrite(1)
+                    progress.clear_flags()  # Clear the flag after using it
+                    continue
+                
                 # Retry up to 3 times, 10 minute timeout per attempt (minimum 3 minutes enforced in rewrite_article)
                 res = None
                 for _attempt in range(3):
-                    res = rewrite_article(art.raw_content, art.source_title, art.location or _location(), base_url=base_url, model=model, timeout_s=600)  # 600s = 10 min, minimum 3 min enforced
+                    # Check if timeout is exceeded (stuck article) - auto-recover with fallback
+                    if progress.is_timeout_exceeded():
+                        logger.warning(f"Article {art.id} appears stuck (timeout exceeded during retry), applying fallback")
+                        art.ai_title = (art.source_title or "").strip()[:500]
+                        art.ai_body = (art.raw_content or "").strip()
+                        art.ai_model = "fallback:source"
+                        art.ai_generated_at = get_local_now()
+                        session.add(art)
+                        session.commit()
+                        processed += 1
+                        progress.inc_rewrite(1)
+                        progress.clear_timeout()  # Clear timeout tracking
+                        progress.clear_flags()
+                        res = None  # Mark as fallback applied
+                        break
+                    
+                    # Check skip/fallback before each attempt
+                    snapshot = progress.snapshot()
+                    if snapshot.get('skip_current') and snapshot.get('current_id') == art.id:
+                        logger.info(f"Skipping article {art.id} per user request (during retry)")
+                        res = None  # Mark as skipped
+                        progress.clear_flags()  # Clear flag
+                        break
+                    if snapshot.get('fallback_current') and snapshot.get('current_id') == art.id:
+                        logger.info(f"Using fallback for article {art.id} per user request (during retry)")
+                        res = None  # Force fallback
+                        progress.clear_flags()  # Clear flag
+                        break
+                    
+                    # Check if article was updated by fallback endpoint (has ai_body now)
+                    session.refresh(art)
+                    if art.ai_body and art.ai_model and art.ai_model.startswith("fallback:"):
+                        logger.info(f"Article {art.id} already has fallback content (updated externally), skipping rewrite")
+                        processed += 1
+                        progress.inc_rewrite(1)
+                        break
+                    
+                    # Check flags right before starting rewrite
+                    snapshot = progress.snapshot()
+                    if snapshot.get('skip_current') and snapshot.get('current_id') == art.id:
+                        logger.info(f"Skipping article {art.id} per user request (before rewrite)")
+                        res = None
+                        progress.clear_flags()
+                        break
+                    if snapshot.get('fallback_current') and snapshot.get('current_id') == art.id:
+                        logger.info(f"Using fallback for article {art.id} per user request (before rewrite)")
+                        # Apply fallback immediately
+                        art.ai_title = (art.source_title or "").strip()[:500]
+                        art.ai_body = (art.raw_content or "").strip()
+                        art.ai_model = "fallback:source"
+                        art.ai_generated_at = get_local_now()
+                        session.add(art)
+                        session.commit()
+                        processed += 1
+                        progress.inc_rewrite(1)
+                        progress.clear_flags()
+                        res = None
+                        break
+                    
+                    # Check during the rewrite attempt
+                    # Note: rewrite_article() is blocking, but we check flags immediately after it completes
+                    try:
+                        res = rewrite_article(art.raw_content, art.source_title, art.location or _location(), base_url=base_url, model=model, fallback_base_url=fallback_base_url, timeout_s=600)  # 600s = 10 min, minimum 3 min enforced
+                    except Exception as rewrite_err:
+                        # Check if user requested skip/fallback during the rewrite
+                        snapshot = progress.snapshot()
+                        if snapshot.get('skip_current') and snapshot.get('current_id') == art.id:
+                            logger.info(f"Skipping article {art.id} per user request (after rewrite error)")
+                            res = None
+                            progress.clear_flags()  # Clear flag
+                            break
+                        if snapshot.get('fallback_current') and snapshot.get('current_id') == art.id:
+                            logger.info(f"Using fallback for article {art.id} per user request (after rewrite error)")
+                            res = None
+                            progress.clear_flags()  # Clear flag
+                            break
+                        # If it's a real error and no skip/fallback requested, continue to next attempt
+                        logger.warning(f"Rewrite attempt {_attempt + 1} failed: {rewrite_err}")
+                        res = None
+                    
+                    # Check flags again after attempt
+                    snapshot = progress.snapshot()
+                    if snapshot.get('skip_current') and snapshot.get('current_id') == art.id:
+                        logger.info(f"Skipping article {art.id} per user request (after attempt)")
+                        res = None
+                        progress.clear_flags()
+                        break
+                    if snapshot.get('fallback_current') and snapshot.get('current_id') == art.id:
+                        logger.info(f"Using fallback for article {art.id} per user request (after attempt)")
+                        # Apply fallback immediately
+                        art.ai_title = (art.source_title or "").strip()[:500]
+                        art.ai_body = (art.raw_content or "").strip()
+                        art.ai_model = "fallback:source"
+                        art.ai_generated_at = get_local_now()
+                        session.add(art)
+                        session.commit()
+                        processed += 1
+                        progress.inc_rewrite(1)
+                        progress.clear_flags()
+                        res = None
+                        break
+                    
                     if res and (res.get("title") or res.get("body")):
                         break
+                    
+                    # Small delay between retries to allow skip/fallback flags to be processed
+                    if _attempt < 2:  # Don't delay after last attempt
+                        import time
+                        time.sleep(0.5)  # Brief pause to check flags
                 if res and (res.get("title") or res.get("body")):
                     art.ai_title = (res.get("title") or art.source_title or "").strip()[:500]
                     art.ai_body = (res.get("body") or "").strip()
@@ -177,6 +329,7 @@ def run_harvest_once():
         wind_speed_unit = aset.wind_speed_unit if aset.wind_speed_unit else 'mph'
         base_url = (aset.ollama_base_url if aset.ollama_base_url else os.environ.get("OLLAMA_BASE_URL"))
         model = (aset.ollama_model if aset.ollama_model else os.environ.get("OLLAMA_MODEL"))
+        fallback_base_url = (aset.ollama_fallback_base_url if aset and aset.ollama_fallback_base_url else None)
         
         # Query for existing articles that need rewriting (missing ai_body or using fallback model)
         # This ensures failed rewrites get retried on every scheduled run
@@ -199,7 +352,7 @@ def run_harvest_once():
     progress.set_rewrite_total(total_to_rewrite)
     # Ensure only a single rewrite runs at a time
     with REWRITE_LOCK:
-        _rewrite_and_store(all_articles_to_rewrite, base_url=base_url, model=model)
+        _rewrite_and_store(all_articles_to_rewrite, base_url=base_url, model=model, fallback_base_url=fallback_base_url)
     # Enforce deduplication after each run to eliminate lookalikes
     try:
         from .maintenance import purge_duplicate_articles

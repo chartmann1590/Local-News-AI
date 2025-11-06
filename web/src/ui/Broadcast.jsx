@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
+import CaptionOverlay from './CaptionOverlay'
 
 export default function Broadcast() {
   const [broadcast, setBroadcast] = useState(null)
@@ -6,6 +7,7 @@ export default function Broadcast() {
   const [error, setError] = useState(null)
   const [regenerating, setRegenerating] = useState(false)
   const [videoUrl, setVideoUrl] = useState(null)
+  const videoRef = useRef(null)
 
   useEffect(() => {
     loadBroadcast()
@@ -175,15 +177,24 @@ export default function Broadcast() {
 
         {videoUrl ? (
           <>
-            <div className="mb-4 rounded-lg overflow-hidden border border-slate-200/60 dark:border-slate-700/60 bg-slate-900">
+            <div className="mb-4 rounded-lg overflow-hidden border border-slate-200/60 dark:border-slate-700/60 bg-slate-900 relative">
               <video
+                ref={videoRef}
                 controls
+                crossOrigin="anonymous"
                 className="w-full"
                 style={{ maxHeight: '600px' }}
                 src={videoUrl}
               >
                 Your browser does not support the video tag.
               </video>
+              {broadcast?.srt_path && broadcast?.id && (
+                <CaptionOverlay
+                  videoRef={videoRef}
+                  srtUrl={broadcast.srt_path}
+                  broadcastId={broadcast.id}
+                />
+              )}
             </div>
 
             {broadcast?.transcript && (

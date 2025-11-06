@@ -1059,6 +1059,48 @@ function StatusBar({ status, timezone }) {
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0
   const detail = status.detail || ''
   const nextRuns = (status.next_runs || []).slice(0, 3)
+  
+  // Countdown timer state
+  const [countdown, setCountdown] = useState(null)
+  
+  // Calculate countdown from timeout tracking
+  useEffect(() => {
+    if (!running || !status.timeout_started_at || !status.timeout_seconds) {
+      setCountdown(null)
+      return
+    }
+    
+    const updateCountdown = () => {
+      try {
+        const startTime = new Date(status.timeout_started_at).getTime()
+        const now = Date.now()
+        const elapsed = Math.floor((now - startTime) / 1000)
+        const remaining = status.timeout_seconds - elapsed
+        
+        if (remaining <= 0) {
+          setCountdown({ minutes: 0, seconds: 0, warning: true })
+          return
+        }
+        
+        const minutes = Math.floor(remaining / 60)
+        const seconds = remaining % 60
+        const warning = remaining < 120 // Less than 2 minutes
+        
+        setCountdown({ minutes, seconds, warning })
+      } catch (e) {
+        setCountdown(null)
+      }
+    }
+    
+    updateCountdown()
+    const interval = setInterval(updateCountdown, 1000)
+    return () => clearInterval(interval)
+  }, [running, status.timeout_started_at, status.timeout_seconds])
+  
+  const formatCountdown = (cd) => {
+    if (!cd) return null
+    return `${cd.minutes}:${cd.seconds.toString().padStart(2, '0')}`
+  }
 
   // Format date/time in location's timezone
   const formatDateTime = (dateStr, includeDate = false) => {
@@ -1104,15 +1146,86 @@ function StatusBar({ status, timezone }) {
                 <div className="h-full bg-blue-600" style={{ width: `${pct}%` }} />
               </div>
               <span className="tabular-nums text-slate-600 dark:text-slate-300">{completed}/{total}</span>
+              {countdown && (
+                <span className={`tabular-nums font-mono text-sm ${countdown.warning ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-slate-600 dark:text-slate-300'}`}>
+                  {formatCountdown(countdown)} remaining
+                </span>
+              )}
             </div>
           )}
+          {(phase === 'broadcast' || phase === 'weather_generate') && countdown && (
+            <span className={`tabular-nums font-mono text-sm ml-auto ${countdown.warning ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-slate-600 dark:text-slate-300'}`}>
+              {formatCountdown(countdown)} remaining
+            </span>
+          )}
           {phase === 'rewrite' && (detail || status.current_title) && (
-            <div className="w-full text-slate-600 dark:text-slate-300">
-              Now: {status.current_url ? (
-                <a className="text-blue-600 hover:underline" href={status.current_url} target="_blank" rel="noreferrer">{status.current_title || detail}</a>
-              ) : (
-                <>{status.current_title || detail}</>
-              )}
+            <div className="w-full flex items-center gap-3 flex-wrap">
+              <span className="text-slate-600 dark:text-slate-300">
+                Now: {status.current_url ? (
+                  <a className="text-blue-600 hover:underline" href={status.current_url} target="_blank" rel="noreferrer">{status.current_title || detail}</a>
+                ) : (
+                  <>{status.current_title || detail}</>
+                )}
+              </span>
+              {(() => {
+                // Check if timeout is exceeded (stuck article)
+                const isStuck = status.timeout_seconds && status.timeout_started_at && (() => {
+                  try {
+                    const started = new Date(status.timeout_started_at)
+                    const now = new Date()
+                    const elapsed = (now - started) / 1000 // seconds
+                    return elapsed > status.timeout_seconds
+                  } catch {
+                    return false
+                  }
+                })()
+                
+                const articleId = status.current_id
+                
+                return (
+                  <div className="flex items-center gap-2 ml-auto">
+                    {isStuck && (
+                      <span className="text-xs text-red-600 dark:text-red-400 font-semibold px-2">
+                        Stuck (timeout exceeded)
+                      </span>
+                    )}
+                    <button
+                      onClick={async () => {
+                        try {
+                          if (articleId) {
+                            await fetch(`/api/articles/${articleId}/skip`, { method: 'POST' })
+                          } else {
+                            await fetch('/api/progress/skip', { method: 'POST' })
+                          }
+                        } catch (e) {
+                          console.error('Failed to skip', e)
+                        }
+                      }}
+                      className="px-2 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200"
+                      title="Skip this article (will retry in next scheduled run)"
+                    >
+                      Skip
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          if (articleId) {
+                            await fetch(`/api/articles/${articleId}/fallback`, { method: 'POST' })
+                          } else {
+                            await fetch('/api/progress/fallback', { method: 'POST' })
+                          }
+                        } catch (e) {
+                          console.error('Failed to send to fallback', e)
+                        }
+                      }}
+                      className="px-2 py-1 rounded-md border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 text-xs hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-300"
+                      title="Use fallback for this article (permanent)"
+                    >
+                      Use Fallback
+                    </button>
+                  </div>
+                )
+              })()}
             </div>
           )}
         </div>
@@ -1204,6 +1317,7 @@ function SettingsPanel({ onClose, reloadAll }) {
   const [form, setForm] = useState({
     ollama_base_url: '',
     ollama_model: '',
+    ollama_fallback_base_url: '',
     temp_unit: 'F',
     wind_speed_unit: 'mph',
     tts_enabled: false,
@@ -1234,6 +1348,7 @@ function SettingsPanel({ onClose, reloadAll }) {
           ...f,
           ollama_base_url: s.ollama_base_url || '',
           ollama_model: s.ollama_model || '',
+          ollama_fallback_base_url: s.ollama_fallback_base_url || '',
           temp_unit: s.temp_unit || 'F',
           wind_speed_unit: s.wind_speed_unit || 'mph',
           tts_enabled: !!ts.enabled,
@@ -1302,6 +1417,7 @@ function SettingsPanel({ onClose, reloadAll }) {
       await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
         ollama_base_url: form.ollama_base_url,
         ollama_model: form.ollama_model,
+        ollama_fallback_base_url: form.ollama_fallback_base_url,
         temp_unit: form.temp_unit,
         wind_speed_unit: form.wind_speed_unit,
       }) })
@@ -1431,6 +1547,11 @@ function SettingsPanel({ onClose, reloadAll }) {
                 <option value="">(default)</option>
                 {models.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
+            </div>
+            <div className="mt-3">
+              <label className="text-sm text-slate-600 dark:text-slate-300 mb-1 block">Fallback Ollama URL (optional)</label>
+              <input value={form.ollama_fallback_base_url} onChange={e=>setForm(f=>({...f, ollama_fallback_base_url: e.target.value}))} placeholder="http://host.docker.internal:11435" className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 w-full" />
+              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Used when primary server fails</div>
             </div>
           </section>
 

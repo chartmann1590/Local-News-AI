@@ -25,6 +25,7 @@ class AppSettings(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     ollama_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     ollama_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ollama_fallback_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     temp_unit: Mapped[str | None] = mapped_column(String(1), nullable=True)  # 'F' or 'C'
     wind_speed_unit: Mapped[str | None] = mapped_column(String(10), nullable=True)  # 'mph' or 'kmh'
     updated_at: Mapped[DateTime | None] = mapped_column(DateTime, nullable=True)
@@ -115,6 +116,7 @@ class Broadcast(Base):
     transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
     video_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     audio_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    srt_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     article_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     includes_weather: Mapped[bool] = mapped_column(Boolean, default=True)

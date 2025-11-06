@@ -26,11 +26,23 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
 - DELETE `/api/articles/{id}/chat`
   - Clears the conversation for the article. Returns `{ status: "cleared" }`.
 
+- POST `/api/articles/{article_id}/rewrite`
+  - Triggers a rewrite for a specific article.
+- POST `/api/articles/{article_id}/skip`
+  - Skips a specific article during a rewrite.
+- POST `/api/articles/{article_id}/fallback`
+  - Forces a specific article to use its raw content as the AI body.
+
 ## Harvest & Jobs
 
 - POST `/api/run-now`
   - Triggers an immediate harvest (fetch + rewrite + weather).
   - Returns `{ status: "ok" }` or error JSON.
+
+- POST `/api/progress/skip`
+  - Skips the current article during a rewrite.
+- POST `/api/progress/fallback`
+  - Forces the current article to use its raw content as the AI body.
 
 ## Weather
 
@@ -40,6 +52,13 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
 - POST `/api/weather/refresh`
   - Refreshes forecast and regenerates the AI weather report in the background.
   - Returns `{ status: "queued" }`.
+
+## Broadcast
+
+- GET `/api/broadcast/latest`
+  - Get the latest broadcast.
+- POST `/api/broadcast/regenerate`
+  - Trigger a new broadcast.
 
 ## Configuration & Settings
 ## Mobile Logs
@@ -66,9 +85,9 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
 - GET `/api/config`
   - Returns minimal configuration info: `{ location, timezone, min_articles }`.
 - GET `/api/settings`
-  - Returns `{ ollama_base_url, ollama_model, temp_unit }`.
+  - Returns `{ ollama_base_url, ollama_model, ollama_fallback_base_url, temp_unit }`.
 - POST `/api/settings`
-  - Body fields (all optional): `ollama_base_url`, `ollama_model`, `temp_unit` (`F` or `C`).
+  - Body fields (all optional): `ollama_base_url`, `ollama_model`, `ollama_fallback_base_url`, `temp_unit` (`F` or `C`).
   - Changing `temp_unit` triggers a weather refresh + AI report.
 
 ## Location

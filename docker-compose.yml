@@ -5,6 +5,8 @@ services:
       args:
         BUILD_DATE: ${BUILD_DATE:-$(Get-Date -Format 'yyyy-MM-dd-HHmmss')}
     container_name: news-ai-app
+    env_file:
+      - .env
     ports:
       - "18080:8000"
     extra_hosts:
@@ -21,6 +23,7 @@ services:
       - TTS_BASE_URL=${TTS_BASE_URL:-http://tts:5500}
       - FEED_EXTRA_URLS=${FEED_EXTRA_URLS:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - OPENWEATHERMAP_API_KEY=${OPENWEATHERMAP_API_KEY}
     volumes:
       - /mnt/h/News-AI/data:/data
     restart: unless-stopped

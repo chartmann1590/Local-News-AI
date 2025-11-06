@@ -38,6 +38,8 @@ RUN apt-get update \
        libxslt1.1 \
        libxslt1-dev \
        libjpeg62-turbo \
+       ffmpeg \
+       imagemagick \
        tzdata \
     && rm -rf /var/lib/apt/lists/*
 

@@ -10,7 +10,7 @@ import pytz
 @dataclass
 class RunStatus:
     running: bool = False
-    phase: Optional[str] = None  # 'fetch', 'rewrite', 'weather_fetch', 'weather_generate'
+    phase: Optional[str] = None  # 'fetch', 'rewrite', 'weather_fetch', 'weather_generate', 'broadcast'
     detail: Optional[str] = None
     total: Optional[int] = None
     completed: Optional[int] = None
@@ -21,6 +21,12 @@ class RunStatus:
     current_id: Optional[int] = None
     current_title: Optional[str] = None
     current_url: Optional[str] = None
+    # Timeout tracking
+    timeout_seconds: Optional[int] = None
+    timeout_started_at: Optional[str] = None
+    # Skip and fallback flags
+    skip_current: bool = False
+    fallback_current: bool = False
 
 
 class Progress:
@@ -98,12 +104,92 @@ class Progress:
             self._state.current_id = None
             self._state.current_title = None
             self._state.current_url = None
+            # Clear timeout tracking
+            self._state.timeout_seconds = None
+            self._state.timeout_started_at = None
+
+    def set_timeout(self, timeout_seconds: int) -> None:
+        """Set timeout tracking for current operation."""
+        with self._lock:
+            tz = self._get_timezone()
+            self._state.timeout_seconds = timeout_seconds
+            self._state.timeout_started_at = self._now(tz)
+
+    def clear_timeout(self) -> None:
+        """Clear timeout tracking."""
+        with self._lock:
+            self._state.timeout_seconds = None
+            self._state.timeout_started_at = None
+
+    def is_timeout_exceeded(self) -> bool:
+        """Check if current operation has exceeded its timeout."""
+        with self._lock:
+            if not self._state.timeout_seconds or not self._state.timeout_started_at:
+                return False
+            
+            try:
+                # Parse the timeout start time (ISO format)
+                started_at_str = self._state.timeout_started_at
+                if '+' in started_at_str or started_at_str.endswith('Z'):
+                    # Has timezone info
+                    started_at = datetime.fromisoformat(started_at_str.replace('Z', '+00:00'))
+                else:
+                    # No timezone, assume local timezone
+                    started_at = datetime.fromisoformat(started_at_str)
+                
+                # Get current time
+                try:
+                    from .geo import get_local_now
+                    now = get_local_now()
+                except Exception:
+                    # Fallback to system time
+                    now = datetime.now()
+                
+                # If started_at is timezone-naive, make now timezone-naive too
+                if started_at.tzinfo is None and now.tzinfo is not None:
+                    now = now.replace(tzinfo=None)
+                elif started_at.tzinfo is not None and now.tzinfo is None:
+                    # Try to make now aware (but this is less ideal)
+                    try:
+                        tz = self._get_timezone()
+                        if tz:
+                            tz_obj = pytz.timezone(tz)
+                            now = tz_obj.localize(now) if now.tzinfo is None else now
+                    except Exception:
+                        pass
+                
+                # Calculate elapsed seconds
+                elapsed = (now - started_at).total_seconds()
+                return elapsed > self._state.timeout_seconds
+            except Exception:
+                # If we can't parse or calculate, assume not exceeded
+                return False
 
     def set_current(self, *, art_id: Optional[int], title: Optional[str], url: Optional[str]) -> None:
         with self._lock:
+            # Only clear flags if we're switching to a different article
+            if self._state.current_id != art_id:
+                self._state.skip_current = False
+                self._state.fallback_current = False
             self._state.current_id = art_id
             self._state.current_title = title
             self._state.current_url = url
+
+    def skip_current_item(self) -> None:
+        """Mark current item to be skipped."""
+        with self._lock:
+            self._state.skip_current = True
+
+    def fallback_current_item(self) -> None:
+        """Mark current item to use fallback immediately."""
+        with self._lock:
+            self._state.fallback_current = True
+
+    def clear_flags(self) -> None:
+        """Clear skip and fallback flags without changing current article."""
+        with self._lock:
+            self._state.skip_current = False
+            self._state.fallback_current = False
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:

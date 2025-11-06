@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import FastAPI, Request, UploadFile, File, Form
+from fastapi import FastAPI, Request, UploadFile, File, Form, Query
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -1027,14 +1027,24 @@ def api_weather():
         tz_name = (cfg.timezone if cfg else os.environ.get("TZ", "America/New_York"))
         
         # Use ai_generated_at if available, otherwise fall back to fetched_at
-        # Keep as UTC ISO - frontend will convert to location timezone
+        # Ensure timestamp is in location's timezone, not server time
         updated_at = None
         if wr:
             dt = wr.ai_generated_at if (wr.ai_generated_at and wr.ai_report) else wr.fetched_at
             if dt:
-                # Ensure UTC timezone for consistent handling
+                import pytz
+                try:
+                    tz = pytz.timezone(tz_name)
+                except Exception:
+                    tz = pytz.timezone("America/New_York")
+                
+                # Ensure timestamp is in location timezone
                 if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
+                    # Naive datetime - assume it's already in location timezone, localize it
+                    dt = tz.localize(dt)
+                elif dt.tzinfo.utcoffset(dt) != tz.utcoffset(dt):
+                    # Different timezone - convert to location timezone
+                    dt = dt.astimezone(tz)
                 updated_at = dt.isoformat()
         
         # Prioritize AppConfig coordinates if location changed (check both location name and coordinates)
@@ -1237,6 +1247,7 @@ def api_get_settings():
         return {
             "ollama_base_url": s.ollama_base_url if s else None,
             "ollama_model": s.ollama_model if s else None,
+            "ollama_fallback_base_url": s.ollama_fallback_base_url if s else None,
             "temp_unit": s.temp_unit if s.temp_unit else "F",
             "wind_speed_unit": s.wind_speed_unit if s.wind_speed_unit else "mph",
         }
@@ -1257,6 +1268,8 @@ def api_set_settings(payload: dict):
             s.ollama_base_url = _normalize_ollama_base((payload.get("ollama_base_url") or None))
         if "ollama_model" in payload:
             s.ollama_model = (payload.get("ollama_model") or None)
+        if "ollama_fallback_base_url" in payload:
+            s.ollama_fallback_base_url = _normalize_ollama_base((payload.get("ollama_fallback_base_url") or None))
         if "temp_unit" in payload:
             new_unit = (payload.get("temp_unit") or "").upper()[:1] or None
             changed_unit = (new_unit != s.temp_unit)
@@ -1536,6 +1549,7 @@ def api_broadcast_latest():
             "duration_seconds": broadcast.duration_seconds,
             "article_count": broadcast.article_count,
             "includes_weather": broadcast.includes_weather,
+            "srt_path": broadcast.srt_path,
         }
     finally:
         session.close()
@@ -1557,6 +1571,7 @@ def api_broadcast_get(broadcast_id: int):
             "duration_seconds": broadcast.duration_seconds,
             "article_count": broadcast.article_count,
             "includes_weather": broadcast.includes_weather,
+            "srt_path": broadcast.srt_path,
         }
     finally:
         session.close()
@@ -1600,6 +1615,54 @@ def api_broadcast_transcript(broadcast_id: int):
         session.close()
 
 
+@app.options("/api/broadcast/{broadcast_id}/srt")
+def api_broadcast_srt_options(broadcast_id: int):
+    """Handle CORS preflight for SRT endpoint."""
+    return Response(
+        content="",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+        }
+    )
+
+
+@app.get("/api/broadcast/{broadcast_id}/srt")
+def api_broadcast_srt(broadcast_id: int):
+    """Stream the broadcast SRT subtitle file."""
+    session = SessionLocal()
+    try:
+        broadcast = session.query(Broadcast).filter_by(id=broadcast_id).one_or_none()
+        if not broadcast:
+            return JSONResponse(status_code=404, content={"error": "broadcast not found"})
+        
+        if not broadcast.srt_path or not os.path.exists(broadcast.srt_path):
+            return JSONResponse(status_code=404, content={"error": "SRT file not found"})
+        
+        # Read file and return with CORS headers for video track element
+        with open(broadcast.srt_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Ensure SRT file is valid - check for empty content
+        if not content.strip():
+            return JSONResponse(status_code=404, content={"error": "SRT file is empty"})
+        
+        return Response(
+            content=content,
+            media_type="text/srt; charset=utf-8",
+            headers={
+                "Content-Disposition": f'inline; filename="broadcast_{broadcast_id}.srt"',
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+                "Content-Type": "text/srt; charset=utf-8",
+            }
+        )
+    finally:
+        session.close()
+
+
 @app.post("/api/broadcast/regenerate")
 def api_broadcast_regenerate():
     """Manually trigger broadcast regeneration."""
@@ -1609,25 +1672,17 @@ def api_broadcast_regenerate():
         aset = session.query(AppSettings).filter_by(id=1).one_or_none()
         base_url = aset.ollama_base_url if aset and aset.ollama_base_url else None
         model = aset.ollama_model if aset and aset.ollama_model else None
-        
-        # Get location
-        from .geo import resolve_location
-        try:
-            cfg = resolve_location()
-            location = cfg.location_name if cfg else None
-        except Exception:
-            location = None
     finally:
         session.close()
     
-    # Run in background thread
+    # Run in background thread - location will be resolved inside generate_and_compile_broadcast
     def _bg():
         try:
             from .broadcast import generate_and_compile_broadcast
             generate_and_compile_broadcast(
                 base_url=base_url,
                 model=model,
-                location=location,
+                location=None,  # Will be resolved using same logic as scheduler
                 force=True
             )
             logger.info("broadcast_regenerated")
@@ -1636,6 +1691,80 @@ def api_broadcast_regenerate():
     
     threading.Thread(target=_bg, daemon=True).start()
     return {"status": "queued", "message": "Broadcast regeneration started"}
+
+
+@app.post("/api/progress/skip")
+def api_progress_skip(article_id: int | None = Query(None, description="Optional article ID to skip")):
+    """Skip the current item being processed, or a specific article if article_id is provided."""
+    from .progress import progress
+    from .database import SessionLocal
+    from .models import Article
+    
+    if article_id is not None:
+        # Use the specific article endpoint
+        session = SessionLocal()
+        try:
+            a = session.query(Article).filter_by(id=article_id).one_or_none()
+            if not a:
+                return JSONResponse(status_code=404, content={"error": "article not found"})
+            
+            snapshot = progress.snapshot()
+            if snapshot.get('current_id') == article_id:
+                progress.skip_current_item()
+                return {"status": "ok", "message": f"Article {article_id} will be skipped in current run"}
+            else:
+                return {"status": "ok", "message": f"Article {article_id} is not currently being rewritten. It will be processed in next scheduled run."}
+        finally:
+            session.close()
+    else:
+        # Original behavior: skip current item
+        progress.skip_current_item()
+        return {"status": "ok", "message": "Current item will be skipped"}
+
+
+@app.post("/api/progress/fallback")
+def api_progress_fallback(article_id: int | None = Query(None, description="Optional article ID to apply fallback to")):
+    """Send current item to fallback immediately, or a specific article if article_id is provided."""
+    from .progress import progress
+    from .database import SessionLocal
+    from .models import Article
+    from .geo import get_local_now
+    
+    if article_id is not None:
+        # Use the specific article endpoint
+        session = SessionLocal()
+        try:
+            a = session.query(Article).filter_by(id=article_id).one_or_none()
+            if not a:
+                return JSONResponse(status_code=404, content={"error": "article not found"})
+            
+            if not a.raw_content:
+                return JSONResponse(status_code=400, content={"error": "article has no raw content for fallback"})
+            
+            # Apply fallback
+            a.ai_title = (a.source_title or "").strip()[:500]
+            a.ai_body = (a.raw_content or "").strip()
+            a.ai_model = "fallback:source"
+            a.ai_generated_at = get_local_now()
+            
+            session.add(a)
+            session.commit()
+            
+            snapshot = progress.snapshot()
+            if snapshot.get('current_id') == article_id:
+                progress.clear_flags()
+            
+            logger.info(f"article_{article_id}_fallback_applied")
+            return {"status": "ok", "message": f"Article {article_id} now uses fallback content", "article_id": article_id}
+        except Exception as e:
+            logger.exception(f"article_{article_id}_fallback_failed")
+            return JSONResponse(status_code=500, content={"error": f"Failed to apply fallback: {str(e)}"})
+        finally:
+            session.close()
+    else:
+        # Original behavior: fallback current item
+        progress.fallback_current_item()
+        return {"status": "ok", "message": "Current item will use fallback"}
 
 
 @app.get("/api/broadcasts")
@@ -1735,6 +1864,7 @@ def api_article_rewrite(article_id: int):
             aset = session.query(AppSettings).filter_by(id=1).one_or_none()
             base_url = aset.ollama_base_url if aset and aset.ollama_base_url else None
             model = aset.ollama_model if aset and aset.ollama_model else None
+            fallback_base_url = aset.ollama_fallback_base_url if aset and aset.ollama_fallback_base_url else None
             
             # Use scheduler's rewrite mechanism with lock to avoid conflicts
             # This ensures immediate start and proper progress tracking
@@ -1759,7 +1889,7 @@ def api_article_rewrite(article_id: int):
                 for attempt in range(3):
                     if attempt > 0:
                         scheduler_mod.progress.phase('rewrite', f'Retry {attempt + 1}/3: {label}')
-                    res = rewrite_article(a.raw_content, a.source_title, location, base_url=base_url, model=model, timeout_s=600)
+                    res = rewrite_article(a.raw_content, a.source_title, location, base_url=base_url, model=model, fallback_base_url=fallback_base_url, timeout_s=600)
                     if res and (res.get("title") or res.get("body")):
                         break
                 
@@ -1799,6 +1929,70 @@ def api_article_rewrite(article_id: int):
     thread.start()
     logger.info(f"article_{article_id}_rewrite_started")
     return {"status": "started", "article_id": article_id}
+
+
+@app.post("/api/articles/{article_id}/skip")
+def api_article_skip(article_id: int):
+    """Skip a specific article during rewrite. Article will be retried in next scheduled run."""
+    session = SessionLocal()
+    try:
+        a = session.query(Article).filter_by(id=article_id).one_or_none()
+        if not a:
+            return JSONResponse(status_code=404, content={"error": "article not found"})
+        
+        # For skip, we don't modify the article - just set the flag for current run
+        # This allows it to be retried in next scheduled run
+        from .progress import progress
+        snapshot = progress.snapshot()
+        
+        # If this is the current article being rewritten, set the flag
+        if snapshot.get('current_id') == article_id:
+            progress.skip_current_item()
+            return {"status": "ok", "message": f"Article {article_id} will be skipped in current run"}
+        else:
+            # Article is not currently being rewritten, so skip is a no-op
+            # But we can still acknowledge it
+            return {"status": "ok", "message": f"Article {article_id} is not currently being rewritten. It will be processed in next scheduled run."}
+    finally:
+        session.close()
+
+
+@app.post("/api/articles/{article_id}/fallback")
+def api_article_fallback(article_id: int):
+    """Apply fallback to a specific article. Article will use raw_content as ai_body permanently."""
+    session = SessionLocal()
+    try:
+        a = session.query(Article).filter_by(id=article_id).one_or_none()
+        if not a:
+            return JSONResponse(status_code=404, content={"error": "article not found"})
+        
+        if not a.raw_content:
+            return JSONResponse(status_code=400, content={"error": "article has no raw content for fallback"})
+        
+        # Apply fallback: use raw_content as ai_body, mark as fallback:source
+        from .geo import get_local_now
+        a.ai_title = (a.source_title or "").strip()[:500]
+        a.ai_body = (a.raw_content or "").strip()
+        a.ai_model = "fallback:source"
+        a.ai_generated_at = get_local_now()
+        
+        session.add(a)
+        session.commit()
+        
+        # If this is the current article being rewritten, clear the flag
+        from .progress import progress
+        snapshot = progress.snapshot()
+        if snapshot.get('current_id') == article_id:
+            progress.clear_flags()
+        
+        logger.info(f"article_{article_id}_fallback_applied")
+        return {"status": "ok", "message": f"Article {article_id} now uses fallback content", "article_id": article_id}
+    except Exception as e:
+        logger.exception(f"article_{article_id}_fallback_failed")
+        return JSONResponse(status_code=500, content={"error": f"Failed to apply fallback: {str(e)}"})
+    finally:
+        session.close()
+
 
 # SPA fallback for client-side routes (avoids 404/blank on refresh)
 @app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)

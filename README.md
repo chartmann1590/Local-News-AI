@@ -12,6 +12,7 @@
 *   **⭐ Article Bookmarking:** Save your favorite articles for later reading.
 *   **🔍 Search and Filtering:** Easily find articles with keyword search and source filtering.
 *   **📺 Broadcast:** A new feature to broadcast news and weather updates.
+*   **📤 Article Sharing:** Share articles from both the web and mobile apps.
 *   **📱 Mobile & Web Apps:** Access your news via a web interface (PWA) or a native Android app built with Flutter.
 *   **🎨 Light/Dark Mode:** Choose your preferred theme.
 *   **⚙️ Highly Configurable:** Customize schedules, news sources, and AI models.
@@ -32,6 +33,7 @@
 
 *   [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/)
 *   [Ollama](https://ollama.ai/) installed and running on the host machine.
+*   An [OpenWeatherMap API Key](https://openweathermap.org/api) (free tier is sufficient) for the weather map feature.
 
 ### Installation
 
@@ -41,12 +43,20 @@
     cd news-ai
     ```
 
-2.  **Build and start the containers:**
+2.  **Create a `.env` file:**
+
+    Create a `.env` file in the root of the project and add your OpenWeatherMap API key:
+
+    ```
+    OPENWEATHERMAP_API_KEY=your_api_key
+    ```
+
+3.  **Build and start the containers:**
     ```bash
     docker compose up --build -d
     ```
 
-3.  **Access the application:**
+4.  **Access the application:**
     *   Web app: [http://localhost:18080](http://localhost:18080)
     *   Web app (HTTPS): [https://localhost:18443](https://localhost:18443)
 
@@ -59,6 +69,7 @@ For more detailed information, please refer to the documentation in the `docs` d
 *   [**`docs/mobile-app.md`**](./docs/mobile-app.md): Mobile app setup and usage guide.
 *   [**`docs/api.md`**](./docs/api.md): API reference.
 *   [**`docs/architecture.md`**](./docs/architecture.md): Application architecture.
+*   [**`docs/broadcast.md`**](./docs/broadcast.md): Broadcast feature documentation.
 *   [**`docs/configuration.md`**](./docs/configuration.md): Environment variables and in-app settings.
 *   [**`docs/customization.md`**](./docs/customization.md): How to customize the application.
 *   [**`docs/deployment.md`**](./docs/deployment.md): Deployment tips.

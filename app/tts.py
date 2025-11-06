@@ -51,21 +51,51 @@ class TTSClient:
         except Exception:
             return None
 
-    def synthesize_wav(self, text: str, voice: Optional[str] = None) -> bytes | None:
+    def synthesize_wav(self, text: str, voice: Optional[str] = None, timeout: int = 600) -> bytes | None:
+        import logging
+        logger = logging.getLogger("app.tts")
+        
+        # Use POST for long text to avoid URL length limits
+        # GET is limited to ~2000 chars in URL, POST can handle much more
+        use_post = len(text) > 1500
+        
         params = {"text": text}
         if voice:
             params["voice"] = voice
-        # Prefer wav for broad browser support
         params["format"] = "wav"
+        
         try:
-            with requests.get(
-                f"{self.base_url}/api/tts", params=params, stream=True, timeout=600
-            ) as r:
-                r.raise_for_status()
-                buf = io.BytesIO()
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        buf.write(chunk)
-                return buf.getvalue()
-        except Exception:
+            url = f"{self.base_url}/api/tts"
+            if use_post:
+                # Use POST for long text
+                logger.debug(f"Using POST for TTS (text length: {len(text)} chars, timeout: {timeout}s)")
+                with requests.post(
+                    url, json=params, stream=True, timeout=timeout
+                ) as r:
+                    r.raise_for_status()
+                    buf = io.BytesIO()
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            buf.write(chunk)
+                    result = buf.getvalue()
+            else:
+                # Use GET for short text
+                logger.debug(f"Using GET for TTS (text length: {len(text)} chars, timeout: {timeout}s)")
+                with requests.get(
+                    url, params=params, stream=True, timeout=timeout
+                ) as r:
+                    r.raise_for_status()
+                    buf = io.BytesIO()
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            buf.write(chunk)
+                    result = buf.getvalue()
+            
+            if not result:
+                logger.warning(f"TTS returned empty response for {len(text)} chars")
+            else:
+                logger.debug(f"TTS returned {len(result)} bytes")
+            return result
+        except Exception as e:
+            logger.error(f"synthesize_wav failed: {e}", exc_info=True)
             return None

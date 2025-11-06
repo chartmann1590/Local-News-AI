@@ -179,15 +179,19 @@ def purge_duplicate_articles() -> dict:
 
 
 def rewrite_missing_articles(limit: int | None = None) -> dict:
-    """Queue rewrites for articles missing AI text or using fallback.
+    """Queue rewrites for articles missing AI text (but NOT fallback articles).
 
     Runs in-process using the same logic as the scheduler: up to 3 retries with
     10-minute timeouts. Optionally limit the number of articles processed.
+    Fallback articles are kept permanently and not rewritten.
     """
     session = SessionLocal()
     try:
+        # Only get articles missing AI body, but exclude fallback articles
         q = session.query(Article).filter(
-            (Article.ai_body.is_(None)) | (Article.ai_model.like("fallback:%"))
+            Article.raw_content.isnot(None),
+            Article.ai_body.is_(None),
+            ~Article.ai_model.like("fallback:%")
         ).order_by(Article.fetched_at.desc())
         if limit is not None and limit > 0:
             q = q.limit(int(limit))
@@ -197,6 +201,7 @@ def rewrite_missing_articles(limit: int | None = None) -> dict:
         aset = session.query(AppSettings).filter_by(id=1).one_or_none()
         base_url = aset.ollama_base_url if aset and aset.ollama_base_url else None
         model = aset.ollama_model if aset and aset.ollama_model else None
+        fallback_base_url = aset.ollama_fallback_base_url if aset and aset.ollama_fallback_base_url else None
 
         # Report progress totals
         scheduler_mod.progress.phase('rewrite', f'Rewriting missing/fallback articles')
@@ -204,7 +209,7 @@ def rewrite_missing_articles(limit: int | None = None) -> dict:
 
         # Use shared implementation (serialized across the app)
         with scheduler_mod.REWRITE_LOCK:
-            scheduler_mod._rewrite_and_store(to_fix, base_url=base_url, model=model)
+            scheduler_mod._rewrite_and_store(to_fix, base_url=base_url, model=model, fallback_base_url=fallback_base_url)
         scheduler_mod.progress.finish()
         return {"rewritten": len(to_fix)}
     finally:
