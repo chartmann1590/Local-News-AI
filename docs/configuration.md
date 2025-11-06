@@ -12,6 +12,7 @@ Set these in `docker-compose.yml` (or an `.env` file referenced by Compose):
 - `SCHEDULE_MORNING`, `SCHEDULE_NOON`, `SCHEDULE_EVENING` — `HH:MM` in local TZ.
 - `OLLAMA_BASE_URL` — Base URL for Ollama (default `http://host.docker.internal:11434`).
 - `OLLAMA_FALLBACK_BASE_URL` — Optional fallback Base URL for Ollama if the primary fails.
+- `OLLAMA_MODEL` — Default model name/tag (e.g., `llama3.2`).
 - `OPENWEATHERMAP_API_KEY` — Your OpenWeatherMap API key for the weather map feature.
 - `TTS_BASE_URL` — Base URL for the TTS server used when no in-app setting is saved (default `http://tts:5500`). When using the provided Compose file, the built-in OpenTTS service is reachable at `http://tts:5500` from the app container.
 - `FEED_EXTRA_URLS` — Comma-separated RSS feed URLs to include in harvesting.
@@ -19,6 +20,7 @@ Set these in `docker-compose.yml` (or an `.env` file referenced by Compose):
 - `CHAT_RATE_LIMIT_PER_MIN` — Per-IP, per-article chat limit per minute (default `10`). Excess requests return HTTP `429`.
 - `MAX_LOG_UPLOAD_BYTES` — Maximum size of log uploads in bytes (default `5242880`, which is 5MB).
 - `LOGS_RATE_LIMIT_PER_MIN` — Per-IP limit for log uploads per minute (default `10`).
+- `ENABLE_FACT_CHECKING` — Enable AI-based factual verification of rewrites (`true` by default). Set `false` to skip verification.
 
 Data volume:
 

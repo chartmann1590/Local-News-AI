@@ -20,6 +20,13 @@
   - `web/src/ui/App.jsx` — main UI
   - Built to `/app/app/static` in the image for FastAPI to serve
 
+## Broadcast Pipeline
+
+1. Collect latest articles + weather.
+2. Generate script; synthesize audio via TTS.
+3. Render video and captions; expose transcript and SRT via API.
+4. UI plays video with optional caption overlay.
+
 ## Data Flow (Harvest)
 
 1. Resolve location + timezone (`app/geo.py`).
@@ -48,3 +55,12 @@ Rate limit: `CHAT_RATE_LIMIT_PER_MIN` (default 10). Exceeding returns HTTP 429.
 
 - A global rewrite lock ensures only one rewrite routine runs at a time (scheduler vs. maintenance).
 - Progress includes `current_title/url` to show the active rewrite in the UI.
+
+## Bookmarks & Sources
+
+- Bookmarks are stored in `Bookmark { id, article_id, created_at }` and surfaced via `/api/articles/bookmarked`.
+- Distinct article sources are available at `/api/articles/sources` for building filter UI.
+
+## Mobile Logs
+
+- Mobile apps can upload logs to `/api/logs/upload` (5MB max, rate-limited). Web UI lists, previews, and deletes logs.

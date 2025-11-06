@@ -18,6 +18,15 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
   - Response: `{ items, page, limit, total, pages }` where each item includes:
     - `id`, `title`, `source`, `source_url`, `image_url`, `published_at`, `fetched_at`, `sort_ts`, `ai_model`, `ai_body`, `rewrite_note`, `byline` (present for non-fallback AI articles).
 
+- GET `/api/articles/sources`
+  - Returns `{ sources: string[] }` — distinct source names for filtering.
+
+- GET `/api/articles/bookmarked?page=1&limit=10`
+  - Returns paginated list of bookmarked articles (most recent bookmarks first).
+
+- POST `/api/articles/{article_id}/bookmark`
+  - Toggles bookmark for an article. Returns `{ bookmarked: boolean, action: "added"|"removed" }`.
+
 - GET `/api/articles/{id}/chat`
   - Returns `{ author, messages: [{ role, content, created_at }] }` for the article.
 - POST `/api/articles/{id}/chat`
@@ -41,8 +50,10 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
 
 - POST `/api/progress/skip`
   - Skips the current article during a rewrite.
+  - Optional query: `article_id` to skip a specific article if it is currently being rewritten.
 - POST `/api/progress/fallback`
   - Forces the current article to use its raw content as the AI body.
+  - Optional query: `article_id` to apply fallback to a specific article if it is currently being rewritten.
 
 ## Weather
 
@@ -59,6 +70,13 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
   - Get the latest broadcast.
 - POST `/api/broadcast/regenerate`
   - Trigger a new broadcast.
+
+- GET `/api/broadcasts?page=1&limit=10`
+  - List broadcasts with pagination.
+- GET `/api/broadcast/{id}/transcript`
+  - Returns the transcript for a broadcast.
+- GET `/api/broadcast/{id}/srt`
+  - Returns SRT subtitles for use with `<track>` elements.
 
 ## Configuration & Settings
 ## Mobile Logs

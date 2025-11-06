@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Broadcast Feature:** A new "Broadcast" feature has been added to the web app, which includes a caption overlay. (2025-11-01)
+- **Broadcast Feature:** A new "Broadcast" feature has been added to the web app, which includes a caption overlay and a button to toggle captions. (2025-11-01)
 - **Article Sharing:** Share articles from both the web and mobile apps. (2025-10-31)
 - **Force Rewrite:** Manually trigger an AI rewrite for an article from the article details screen. (2025-10-31)
 - **Article Bookmarking:** You can now bookmark articles in both the web and mobile apps. (2025-10-31)
@@ -15,10 +15,14 @@
 - **PWA: in-app Install button + global handler** (2025-10-29)
 - **HTTPS reverse proxy (nginx) on free port 18443 with self-signed cert** (2025-10-29)
 - **Flutter mobile app and comprehensive documentation** (2025-10-29)
+- **AI Fact-Checking for Rewrites:** Optional verification step to ensure rewritten articles preserve facts. Controlled via `ENABLE_FACT_CHECKING` (default `true`). (2025-11-06)
+- **API:** `GET /api/articles/sources`, `GET /api/articles/bookmarked`, `POST /api/articles/{id}/bookmark`, `GET /api/broadcasts`, `GET /api/broadcast/{id}/transcript`, `GET /api/broadcast/{id}/srt`. (2025-11-06)
 
 ### Changed
 
 - **Web UI:** The status bar now shows a countdown timer for rewrite and broadcast phases, and includes "Skip" and "Use Fallback" buttons during rewrites. (2025-11-01)
+- **TTS Synthesis:** TTS is now more robust, using POST requests for long text and proactive chunking to prevent audio truncation. (2025-11-01)
+- **Weather Icons:** Weather icons in the broadcast video are now rendered as geometric shapes for better reliability. (2025-11-01)
 - **TTS Timeout:** Increased timeout for TTS voice generation to 10 minutes to handle longer audio generation tasks. (2025-11-01)
 - **Geocoding:** Enhanced geocoding logic to parse and match state information more accurately, ensuring correct location coordinates are returned. (2025-11-01)
 - **Docker:** The `nginx` service now generates its own self-signed certificate and configuration, removing the need for pre-existing files. (2025-10-31)
@@ -32,6 +36,7 @@
 - **Documentation:** The main `README.md` has been rewritten for clarity and completeness. All documentation has been reviewed and updated. (2025-10-30)
 - **Sorting:** Articles are now sorted newest-first across the stack. (2025-10-30)
 - **Frontend:** Replaced Tailwind CDN with compiled Tailwind and fixed dark mode. (2025-10-29)
+- **Progress Controls:** `/api/progress/skip` and `/api/progress/fallback` accept optional `article_id` to target specific items if active. (2025-11-06)
 
 ### Fixed
 

@@ -6,6 +6,7 @@
 
 *   **📍 Automatic Location Detection:** Get news and weather relevant to your current location, with a manual override option.
 *   **🤖 AI-Powered Summaries:** Uses a local Ollama instance to rewrite and summarize news articles.
+*   **✅ AI Fact-Checking:** Optional verification step ensures rewritten articles preserve factual accuracy.
 *   **🌦️ Weather Reports:** Includes a 5-day forecast, weather icons, and an embedded radar map.
 *   **🗣️ Text-to-Speech:** Listen to articles and weather reports with offline TTS (OpenTTS/Piper).
 *   **💬 AI Comments:** Engage in a conversation with the AI about each article.
@@ -13,6 +14,7 @@
 *   **🔍 Search and Filtering:** Easily find articles with keyword search and source filtering.
 *   **📺 Broadcast:** A new feature to broadcast news and weather updates.
 *   **📤 Article Sharing:** Share articles from both the web and mobile apps.
+*   **🧾 Mobile Log Viewer:** Upload and review logs from the Android app for troubleshooting.
 *   **📱 Mobile & Web Apps:** Access your news via a web interface (PWA) or a native Android app built with Flutter.
 *   **🎨 Light/Dark Mode:** Choose your preferred theme.
 *   **⚙️ Highly Configurable:** Customize schedules, news sources, and AI models.
@@ -49,6 +51,8 @@
 
     ```
     OPENWEATHERMAP_API_KEY=your_api_key
+    # Optional: enable fact-checking (default true)
+    ENABLE_FACT_CHECKING=true
     ```
 
 3.  **Build and start the containers:**

@@ -22,6 +22,7 @@ The broadcast page has the following features:
 
 *   **Video Player:** A video player to watch the latest broadcast.
 *   **Caption Overlay:** Captions are displayed over the video.
+*   **Caption Toggle:** A button to toggle the visibility of the captions.
 *   **Transcript:** The full transcript of the broadcast is displayed below the video.
 *   **Regenerate Broadcast:** A button to manually trigger a new broadcast.
 
@@ -29,5 +30,8 @@ The broadcast page has the following features:
 
 The Broadcast feature has the following API endpoints:
 
-*   `GET /api/broadcast/latest`: Get the latest broadcast.
-*   `POST /api/broadcast/regenerate`: Trigger a new broadcast.
+- `GET /api/broadcast/latest` — Get the latest broadcast metadata.
+- `POST /api/broadcast/regenerate` — Trigger a new broadcast.
+- `GET /api/broadcasts?page=1&limit=10` — List recent broadcasts.
+- `GET /api/broadcast/{id}/transcript` — Fetch the transcript text.
+- `GET /api/broadcast/{id}/srt` — Fetch SRT subtitles (for `<track>` captions).

@@ -8,6 +8,7 @@ export default function Broadcast() {
   const [regenerating, setRegenerating] = useState(false)
   const [videoUrl, setVideoUrl] = useState(null)
   const videoRef = useRef(null)
+  const [captionsEnabled, setCaptionsEnabled] = useState(true)
 
   useEffect(() => {
     loadBroadcast()
@@ -189,11 +190,32 @@ export default function Broadcast() {
                 Your browser does not support the video tag.
               </video>
               {broadcast?.srt_path && broadcast?.id && (
-                <CaptionOverlay
-                  videoRef={videoRef}
-                  srtUrl={broadcast.srt_path}
-                  broadcastId={broadcast.id}
-                />
+                <>
+                  <button
+                    onClick={() => setCaptionsEnabled(!captionsEnabled)}
+                    className="absolute top-4 right-4 z-20 bg-black/75 hover:bg-black/90 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2"
+                    title={captionsEnabled ? 'Hide captions' : 'Show captions'}
+                  >
+                    {captionsEnabled ? (
+                      <>
+                        <span>CC</span>
+                        <span className="text-xs">ON</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>CC</span>
+                        <span className="text-xs">OFF</span>
+                      </>
+                    )}
+                  </button>
+                  {captionsEnabled && (
+                    <CaptionOverlay
+                      videoRef={videoRef}
+                      srtUrl={broadcast.srt_path}
+                      broadcastId={broadcast.id}
+                    />
+                  )}
+                </>
               )}
             </div>
 

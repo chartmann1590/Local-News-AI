@@ -13,6 +13,7 @@ This folder holds the in‑depth docs. The root README gives a friendly overview
 - Deployment: `deployment.md`
 - Troubleshooting: `troubleshooting.md`
 - API Reference: `api.md`
+- Fact Checking: `../FACT_CHECKING.md`
 
 ## Feature Summary (context)
 
@@ -24,3 +25,6 @@ This folder holds the in‑depth docs. The root README gives a friendly overview
 - Optional Text-to-Speech (OpenTTS/Piper) with in-app voice selection and audio playback for articles and weather
 - Per-article AI comments: collapsible "Comments" under each article; chat uses article context and the generated author name
 - Native Android mobile app with Flutter (full feature parity with web interface)
+- Bookmarks and sharing across web + mobile
+- Broadcasts with video + captions; transcript and SRT endpoints
+- Optional AI fact-checking of rewrites (see `ENABLE_FACT_CHECKING`)

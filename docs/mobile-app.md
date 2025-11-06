@@ -485,9 +485,7 @@ Potential features for future releases:
 - Push notifications for new articles
 - Widget support for home screen
 - Better error recovery
-- Article bookmarks/favorites
-- Share functionality
-- Search functionality
+- Download/save audio for offline listening
 
 ## Security Considerations
 
@@ -508,6 +506,5 @@ For issues or questions:
 
 ---
 
-**Last Updated**: 2024
-**Documentation Version**: 1.0
-
+**Last Updated**: 2025
+**Documentation Version**: 1.1

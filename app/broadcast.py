@@ -976,21 +976,113 @@ def _get_weather_icon_and_color(weather_code: int) -> Tuple[str, str, str]:
 
 
 def _draw_weather_icon(draw: ImageDraw.ImageDraw, weather_code: int, center_x: int, center_y: int, size: int = 60):
-    """Draw a simple weather icon based on WMO weather code."""
-    icon, color, _ = _get_weather_icon_and_color(weather_code)
+    """Draw a simple geometric weather icon based on WMO weather code.
 
-    # Try to use Unicode emoji fonts
-    try:
-        # Try to load a font that supports emoji
-        font = ImageFont.truetype("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf", size)
-    except Exception:
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", size)
-        except Exception:
-            font = ImageFont.load_default()
+    Uses basic shapes instead of emojis to ensure reliable rendering.
+    """
+    _, color_hex, condition = _get_weather_icon_and_color(weather_code)
 
-    # Draw the icon
-    draw.text((center_x, center_y), icon, fill=color, font=font, anchor='mm')
+    # Convert hex color to RGB tuple
+    color = tuple(int(color_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+
+    # Draw icon based on weather code
+    if weather_code == 0:  # Clear
+        # Draw sun (circle with rays)
+        sun_radius = size // 2
+        draw.ellipse(
+            [(center_x - sun_radius, center_y - sun_radius),
+             (center_x + sun_radius, center_y + sun_radius)],
+            fill='#FDB813', outline='#F59E0B', width=3
+        )
+        # Sun rays
+        ray_length = size // 3
+        for angle in range(0, 360, 45):
+            import math
+            rad = math.radians(angle)
+            x1 = center_x + int((sun_radius + 5) * math.cos(rad))
+            y1 = center_y + int((sun_radius + 5) * math.sin(rad))
+            x2 = center_x + int((sun_radius + ray_length) * math.cos(rad))
+            y2 = center_y + int((sun_radius + ray_length) * math.sin(rad))
+            draw.line([(x1, y1), (x2, y2)], fill='#FDB813', width=3)
+
+    elif weather_code in [1, 2]:  # Mostly clear
+        # Sun with small cloud
+        sun_r = size // 3
+        draw.ellipse(
+            [(center_x - sun_r - 10, center_y - sun_r),
+             (center_x + sun_r - 10, center_y + sun_r)],
+            fill='#FDB813', outline='#F59E0B', width=2
+        )
+        # Small cloud
+        cloud_x = center_x + 10
+        draw.ellipse([(cloud_x - 15, center_y - 10), (cloud_x + 15, center_y + 20)], fill='#E2E8F0')
+        draw.ellipse([(cloud_x - 5, center_y - 15), (cloud_x + 20, center_y + 15)], fill='#E2E8F0')
+
+    elif weather_code == 3:  # Partly cloudy
+        # Cloud
+        draw.ellipse([(center_x - 25, center_y - 10), (center_x + 5, center_y + 20)], fill='#CBD5E1')
+        draw.ellipse([(center_x - 10, center_y - 15), (center_x + 25, center_y + 20)], fill='#CBD5E1')
+        draw.ellipse([(center_x, center_y - 10), (center_x + 20, center_y + 15)], fill='#CBD5E1')
+
+    elif weather_code in [45, 48]:  # Foggy
+        # Horizontal lines for fog
+        for i in range(4):
+            y = center_y - 20 + (i * 12)
+            draw.line([(center_x - 25, y), (center_x + 25, y)], fill='#94A3B8', width=4)
+
+    elif weather_code in [51, 53, 55, 56, 57]:  # Drizzle
+        # Cloud with light rain
+        draw.ellipse([(center_x - 20, center_y - 20), (center_x + 20, center_y + 5)], fill='#94A3B8')
+        # Light rain drops
+        for i in range(3):
+            x = center_x - 15 + (i * 15)
+            draw.line([(x, center_y + 8), (x, center_y + 20)], fill='#60A5FA', width=2)
+
+    elif weather_code in [61, 63, 65, 66, 67, 80, 81, 82]:  # Rain
+        # Cloud with rain
+        draw.ellipse([(center_x - 25, center_y - 20), (center_x + 5, center_y + 5)], fill='#64748B')
+        draw.ellipse([(center_x - 10, center_y - 25), (center_x + 25, center_y + 5)], fill='#64748B')
+        # Rain drops
+        for i in range(4):
+            x = center_x - 20 + (i * 13)
+            draw.line([(x, center_y + 8), (x, center_y + 25)], fill='#3B82F6', width=3)
+
+    elif weather_code in [71, 73, 75, 77, 85, 86]:  # Snow
+        # Cloud with snowflakes
+        draw.ellipse([(center_x - 20, center_y - 20), (center_x + 20, center_y + 5)], fill='#94A3B8')
+        # Snowflakes (asterisks)
+        for i in range(3):
+            x = center_x - 15 + (i * 15)
+            y = center_y + 15
+            # Simple asterisk shape
+            draw.line([(x, y - 5), (x, y + 5)], fill='#FFFFFF', width=2)
+            draw.line([(x - 4, y), (x + 4, y)], fill='#FFFFFF', width=2)
+            draw.line([(x - 3, y - 3), (x + 3, y + 3)], fill='#FFFFFF', width=2)
+            draw.line([(x - 3, y + 3), (x + 3, y - 3)], fill='#FFFFFF', width=2)
+
+    elif weather_code in [95, 96, 99]:  # Thunderstorm
+        # Dark cloud with lightning
+        draw.ellipse([(center_x - 25, center_y - 20), (center_x + 5, center_y + 5)], fill='#475569')
+        draw.ellipse([(center_x - 10, center_y - 25), (center_x + 25, center_y + 5)], fill='#475569')
+        # Lightning bolt
+        lightning = [
+            (center_x, center_y + 5),
+            (center_x - 5, center_y + 15),
+            (center_x, center_y + 15),
+            (center_x - 8, center_y + 28)
+        ]
+        draw.line(lightning, fill='#FCD34D', width=4)
+
+    else:  # Default
+        # Simple thermometer
+        draw.rectangle(
+            [(center_x - 8, center_y - 20), (center_x + 8, center_y + 10)],
+            fill='#E2E8F0', outline='#94A3B8', width=2
+        )
+        draw.ellipse(
+            [(center_x - 12, center_y + 5), (center_x + 12, center_y + 25)],
+            fill='#EF4444', outline='#DC2626', width=2
+        )
 
 
 def create_weather_slide(weather_report: Optional[WeatherReport], output_path: str, width: int = 1280, height: int = 720) -> bool:
@@ -1054,13 +1146,9 @@ def create_weather_slide(weather_report: Optional[WeatherReport], output_path: s
                         temp_text = f"{int(temp)}°"
                         draw.text((220, current_y_start + 80), temp_text, fill='#FFFFFF', font=font_title, anchor='mm')
 
-                        # Weather icon for current conditions
-                        icon, icon_color, condition = _get_weather_icon_and_color(weather_code)
-                        try:
-                            icon_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 80)
-                        except:
-                            icon_font = ImageFont.load_default()
-                        draw.text((220, current_y_start + 180), icon, fill='#FFFFFF', font=icon_font, anchor='mm')
+                        # Weather icon for current conditions - use geometric shapes
+                        _, icon_color, condition = _get_weather_icon_and_color(weather_code)
+                        _draw_weather_icon(draw, weather_code, 220, current_y_start + 180, size=80)
 
                         # Condition text
                         draw.text((220, current_y_start + 240), condition, fill='#E2E8F0', font=font_regular, anchor='mm')
@@ -1174,14 +1262,9 @@ def create_weather_slide(weather_report: Optional[WeatherReport], output_path: s
                             draw.text((day_center_x, card_top + 20), day_name.upper(), fill='#94A3B8', font=font_small, anchor='mm')
                             draw.text((day_center_x, card_top + 45), day_num, fill='#CBD5E1', font=font_tiny, anchor='mm')
 
-                            # Weather icon
+                            # Weather icon - use geometric shapes
                             weather_code = weather_codes[day_idx] if day_idx < len(weather_codes) else 0
-                            icon, icon_color, condition = _get_weather_icon_and_color(weather_code)
-                            try:
-                                icon_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 48)
-                            except:
-                                icon_font = ImageFont.load_default()
-                            draw.text((day_center_x, card_top + 95), icon, fill='#FFFFFF', font=icon_font, anchor='mm')
+                            _draw_weather_icon(draw, weather_code, day_center_x, card_top + 95, size=48)
 
                             # Temperatures
                             max_temp = max_temps[day_idx] if day_idx < len(max_temps) and max_temps[day_idx] is not None else None
@@ -1261,66 +1344,75 @@ def _generate_tts_with_chunking(
     temp_dir: str,
     segment_name: str
 ) -> Optional[Tuple[bytes, float]]:
-    """Generate TTS audio with automatic chunking fallback.
+    """Generate TTS audio with PROACTIVE chunking to prevent truncation.
 
-    First tries to generate audio for complete text. If that results in
-    truncated audio (< 70% expected duration), automatically chunks the text
-    and concatenates audio.
+    IMPORTANT: Always chunks text proactively to prevent TTS truncation.
+    - Chunks text into 500-char segments (safe for all TTS engines)
+    - Generates audio for each chunk
+    - Concatenates all chunks seamlessly
+    - Guarantees 100% of text is converted to audio
 
     Returns: (audio_bytes, duration) or None
     """
-    # Try full text first
-    logger.info(f"Attempting TTS for {len(text)} chars (full text)")
-    audio_bytes = client.synthesize_wav(text, voice=voice, timeout=timeout)
+    # PROACTIVE CHUNKING: Always chunk text over 500 chars
+    # This prevents truncation instead of trying to fix it after
+    SAFE_CHUNK_SIZE = 500  # Very conservative - works with all TTS engines
 
-    if not audio_bytes:
-        return None
+    if len(text) <= SAFE_CHUNK_SIZE:
+        # Short text - can send directly
+        logger.info(f"Generating TTS for {len(text)} chars (single chunk)")
+        audio_bytes = client.synthesize_wav(text, voice=voice, timeout=timeout)
 
-    # Validate duration
-    temp_path = os.path.join(temp_dir, f"_temp_{segment_name}.wav")
-    with open(temp_path, 'wb') as f:
-        f.write(audio_bytes)
+        if not audio_bytes:
+            logger.error("TTS failed for short text")
+            return None
 
-    try:
-        from moviepy.editor import AudioFileClip
-        clip = AudioFileClip(temp_path)
-        duration = clip.duration
-        clip.close()
+        # Get duration
+        temp_path = os.path.join(temp_dir, f"_{segment_name}.wav")
+        with open(temp_path, 'wb') as f:
+            f.write(audio_bytes)
 
-        # Check if audio is truncated
-        word_count = len(text.split())
-        expected_duration = (word_count / 150.0) * 60.0
-        duration_ratio = duration / expected_duration if expected_duration > 0 else 1.0
-
-        if duration_ratio >= 0.70:
-            # Audio is good!
-            logger.info(f"TTS successful: {duration:.2f}s (ratio: {duration_ratio:.2f}x)")
+        try:
+            from moviepy.editor import AudioFileClip
+            clip = AudioFileClip(temp_path)
+            duration = clip.duration
+            clip.close()
+            logger.info(f"✓ TTS complete: {duration:.2f}s")
             return (audio_bytes, duration)
+        except Exception as e:
+            logger.error(f"Failed to get duration: {e}")
+            return None
 
-        # Audio is truncated - need to chunk
-        logger.warning(f"TTS audio truncated ({duration_ratio:.1%}), retrying with chunking")
+    # Long text - PROACTIVELY chunk it
+    chunks = _smart_chunk_text(text, max_chars=SAFE_CHUNK_SIZE)
+    logger.info(f"Proactive chunking: {len(text)} chars → {len(chunks)} chunks of ~{SAFE_CHUNK_SIZE} chars")
 
-    except Exception as e:
-        logger.warning(f"Failed to validate audio: {e}")
-        # Continue to chunking attempt
+    if len(chunks) == 1 and len(text) > SAFE_CHUNK_SIZE:
+        # Chunking failed (single sentence too long) - split by words
+        logger.warning(f"Single sentence too long ({len(text)} chars), splitting by words")
+        words = text.split()
+        chunks = []
+        current = ""
+        for word in words:
+            if current and len(current) + len(word) + 1 > SAFE_CHUNK_SIZE:
+                chunks.append(current.strip())
+                current = word
+            else:
+                current = current + " " + word if current else word
+        if current:
+            chunks.append(current.strip())
+        logger.info(f"Word-split: {len(text)} chars → {len(chunks)} chunks")
 
-    # Chunk and retry
-    chunks = _smart_chunk_text(text, max_chars=1000)
-    if len(chunks) == 1:
-        # Couldn't chunk further, return what we have
-        logger.warning("Cannot chunk further, using truncated audio")
-        return (audio_bytes, duration if 'duration' in locals() else 0.0)
-
-    logger.info(f"Retrying with {len(chunks)} chunks")
     chunk_audio_files = []
 
+    # Generate audio for each chunk
     for chunk_idx, chunk in enumerate(chunks):
         logger.info(f"Generating chunk {chunk_idx+1}/{len(chunks)}: {len(chunk)} chars")
         chunk_audio = client.synthesize_wav(chunk, voice=voice, timeout=timeout)
 
         if not chunk_audio:
-            logger.error(f"Chunk {chunk_idx+1} failed to generate")
-            # Clean up and return None
+            logger.error(f"Chunk {chunk_idx+1} TTS failed")
+            # Clean up
             for f in chunk_audio_files:
                 try:
                     os.remove(f)
@@ -1332,12 +1424,13 @@ def _generate_tts_with_chunking(
         with open(chunk_path, 'wb') as f:
             f.write(chunk_audio)
         chunk_audio_files.append(chunk_path)
+        logger.info(f"✓ Chunk {chunk_idx+1}/{len(chunks)} complete")
 
     # Concatenate all chunks
     try:
         from moviepy.editor import AudioFileClip, concatenate_audioclips
 
-        logger.info(f"Concatenating {len(chunk_audio_files)} audio chunks")
+        logger.info(f"Concatenating {len(chunk_audio_files)} audio chunks...")
         clips = [AudioFileClip(f) for f in chunk_audio_files]
         final_audio = concatenate_audioclips(clips)
         total_duration = final_audio.duration
@@ -1359,7 +1452,7 @@ def _generate_tts_with_chunking(
         with open(concat_path, 'rb') as f:
             final_bytes = f.read()
 
-        logger.info(f"✓ Chunked audio concatenated: {total_duration:.2f}s total")
+        logger.info(f"✓ Audio concatenated: {total_duration:.2f}s total ({len(chunks)} chunks)")
         return (final_bytes, total_duration)
 
     except Exception as e:
