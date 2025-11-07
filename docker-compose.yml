@@ -21,7 +21,7 @@ services:
       - SCHEDULE_EVENING=${SCHEDULE_EVENING:-19:30}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - TTS_BASE_URL=${TTS_BASE_URL:-http://tts:5500}
-      - FEED_EXTRA_URLS=${FEED_EXTRA_URLS:-}
+      - FEED_EXTRA_URLS=${FEED_EXTRA_URLS:-https://rss.nytimes.com/services/xml/rss/nyt/US.xml,https://feeds.npr.org/1003/rss.xml,https://feeds.reuters.com/Reuters/domesticNews,https://www.theguardian.com/us-news/rss,https://feeds.foxnews.com/foxnews/national}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - OPENWEATHERMAP_API_KEY=${OPENWEATHERMAP_API_KEY}
       - ENABLE_FACT_CHECKING=${ENABLE_FACT_CHECKING:-true}
@@ -41,6 +41,11 @@ services:
     expose:
       - "5500"
     restart: unless-stopped
+    # Memory limits to prevent OOM kills
+    mem_limit: 2g
+    mem_reservation: 512m
+    # Use --shm-size for shared memory
+    shm_size: 256m
 
   nginx:
     image: nginx:alpine
