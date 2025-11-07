@@ -16,6 +16,7 @@ class Constants {
   static const String settingsEndpoint = '/api/settings';
   static const String ttsSettingsEndpoint = '/api/tts/settings';
   static const String locationEndpoint = '/api/location';
+  static const String broadcastEndpoint = '/api/broadcast';
   
   // Timeouts
   // Mobile networks can be variable; allow a bit more time and retry in ApiService

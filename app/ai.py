@@ -11,6 +11,8 @@ import requests
 
 DEFAULT_OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
 DEFAULT_OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
+# Enable/disable AI fact-checking verification (default: enabled)
+ENABLE_FACT_CHECKING = os.environ.get("ENABLE_FACT_CHECKING", "true").lower() in ("true", "1", "yes")
 
 
 def _post_ollama(path: str, payload: Dict[str, Any], base_url: Optional[str] = None, timeout_s: int = 600) -> Dict[str, Any]:
@@ -39,7 +41,115 @@ def _post_ollama(path: str, payload: Dict[str, Any], base_url: Optional[str] = N
 # Minimum timeout for article rewrites (3 minutes)
 MIN_REWRITE_TIMEOUT_S = 180
 
-def rewrite_article(content: str, source_title: str | None, location: str, *, base_url: Optional[str] = None, model: Optional[str] = None, fallback_base_url: Optional[str] = None, timeout_s: int = 600) -> Optional[Dict[str, str]]:
+def verify_article_facts(original_content: str, rewritten_content: str, *, base_url: Optional[str] = None, model: Optional[str] = None, timeout_s: int = 120) -> Dict[str, Any]:
+    """
+    Verify that the rewritten article maintains factual accuracy compared to the original.
+
+    Returns a dict with:
+    - accurate (bool): Whether the rewrite is factually accurate
+    - confidence (float): Confidence score 0-1
+    - issues (list): List of factual discrepancies found
+    - details (str): Explanation of verification
+    """
+    import logging
+    logger = logging.getLogger("app.ai")
+
+    if not original_content or not rewritten_content:
+        return {"accurate": False, "confidence": 0.0, "issues": ["Missing content"], "details": "Cannot verify empty content"}
+
+    system_prompt = (
+        "You are a fact-checker verifying that a rewritten news article maintains factual accuracy. "
+        "Compare the original and rewritten versions. Check for:\n"
+        "- Names of people, organizations, locations (must match exactly)\n"
+        "- Dates, times, and numbers (must be identical)\n"
+        "- Key events and facts (must not be altered)\n"
+        "- Quotes (if present, must be accurate)\n\n"
+        "The rewrite can have different wording, structure, or length, but FACTS must remain unchanged."
+    )
+
+    user_prompt = (
+        "ORIGINAL ARTICLE:\n" + original_content[:3000] + "\n\n"
+        "REWRITTEN ARTICLE:\n" + rewritten_content[:3000] + "\n\n"
+        "Verify factual accuracy. Output strict JSON:\n"
+        "{\n"
+        '  "accurate": true/false,\n'
+        '  "confidence": 0.0-1.0,\n'
+        '  "issues": ["list any factual discrepancies"],\n'
+        '  "details": "brief explanation"\n'
+        "}"
+    )
+
+    payload = {
+        "model": (model or DEFAULT_OLLAMA_MODEL),
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "stream": False,
+        "options": {"temperature": 0.1},  # Low temperature for factual analysis
+        "format": "json",
+    }
+
+    try:
+        data = _post_ollama("/api/chat", payload, base_url=base_url, timeout_s=timeout_s)
+        message = data.get("message", {})
+        response_content = message.get("content", "")
+
+        # Parse JSON response
+        if isinstance(response_content, dict):
+            result = response_content
+        elif isinstance(response_content, str):
+            content_clean = response_content.strip()
+            if content_clean.startswith("```json"):
+                content_clean = content_clean[7:]
+            elif content_clean.startswith("```"):
+                content_clean = content_clean[3:]
+            if content_clean.endswith("```"):
+                content_clean = content_clean[:-3]
+            content_clean = content_clean.strip()
+
+            try:
+                result = json.loads(content_clean)
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse fact-check JSON response")
+                return {
+                    "accurate": True,  # Default to accepting if verification fails
+                    "confidence": 0.5,
+                    "issues": [],
+                    "details": "Verification service unavailable, proceeding with rewrite"
+                }
+        else:
+            return {
+                "accurate": True,
+                "confidence": 0.5,
+                "issues": [],
+                "details": "Verification service returned unexpected format"
+            }
+
+        # Ensure required fields exist
+        return {
+            "accurate": result.get("accurate", True),
+            "confidence": float(result.get("confidence", 0.5)),
+            "issues": result.get("issues", []),
+            "details": result.get("details", "")
+        }
+
+    except Exception as e:
+        logger.warning(f"Fact verification failed: {e}")
+        # If verification fails, default to accepting the rewrite
+        return {
+            "accurate": True,
+            "confidence": 0.5,
+            "issues": [],
+            "details": f"Verification error: {str(e)}"
+        }
+
+
+def rewrite_article(content: str, source_title: str | None, location: str, *, base_url: Optional[str] = None, model: Optional[str] = None, fallback_base_url: Optional[str] = None, timeout_s: int = 600, verify_facts: Optional[bool] = None) -> Optional[Dict[str, str]]:
+    # Use environment variable default if verify_facts not explicitly set
+    if verify_facts is None:
+        verify_facts = ENABLE_FACT_CHECKING
+
     # Ensure timeout is at least 3 minutes
     timeout_s = max(timeout_s, MIN_REWRITE_TIMEOUT_S)
     if not content or len(content.strip()) < 100:
@@ -83,8 +193,10 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
         # Ollama chat returns {'message': {'content': '...json...'}}
         message = data.get("message", {})
         response_content = message.get("content", "")
+        rewrite_result = None
+
         if isinstance(response_content, dict):
-            return {
+            rewrite_result = {
                 "title": response_content.get("title", ""),
                 "body": response_content.get("body", ""),
                 "author": response_content.get("author", ""),
@@ -100,10 +212,10 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
             if content_clean.endswith("```"):
                 content_clean = content_clean[:-3]  # Remove closing ```
             content_clean = content_clean.strip()
-            
+
             try:
                 obj = json.loads(content_clean)
-                return {
+                rewrite_result = {
                     "title": obj.get("title", ""),
                     "body": obj.get("body", ""),
                     "author": obj.get("author", ""),
@@ -115,16 +227,53 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
                 if json_match:
                     try:
                         obj = json.loads(json_match.group(0))
-                        return {
+                        rewrite_result = {
                             "title": obj.get("title", ""),
                             "body": obj.get("body", ""),
                             "author": obj.get("author", ""),
                         }
                     except json.JSONDecodeError:
                         pass
-                logger.warning(f"JSON parse error: {json_err}")
-                logger.debug(f"Response content (first 1000 chars): {content_clean[:1000]}")
-                raise  # Re-raise to trigger fallback
+                if not rewrite_result:
+                    logger.warning(f"JSON parse error: {json_err}")
+                    logger.debug(f"Response content (first 1000 chars): {content_clean[:1000]}")
+                    raise  # Re-raise to trigger fallback
+
+        # Perform fact-checking verification if enabled and rewrite was successful
+        if rewrite_result and verify_facts:
+            logger.info("Verifying factual accuracy of rewrite...")
+            verification = verify_article_facts(
+                text,
+                rewrite_result.get("body", ""),
+                base_url=base_url,
+                model=model,
+                timeout_s=120
+            )
+
+            logger.info(f"Fact-check: accurate={verification['accurate']}, confidence={verification['confidence']:.2f}")
+
+            # If verification fails with high confidence, reject the rewrite
+            if not verification["accurate"] and verification["confidence"] > 0.7:
+                logger.warning(f"Fact-check FAILED: {verification['details']}")
+                if verification["issues"]:
+                    logger.warning(f"Issues found: {', '.join(verification['issues'])}")
+
+                # Add verification metadata to result
+                rewrite_result["verification"] = verification
+                rewrite_result["fact_check_failed"] = True
+
+                # Return None to indicate the rewrite should be rejected
+                return None
+            elif not verification["accurate"]:
+                # Low confidence failure - log warning but accept
+                logger.warning(f"Fact-check uncertain: {verification['details']}")
+                rewrite_result["verification"] = verification
+            else:
+                # Passed verification
+                logger.info(f"✓ Fact-check passed: {verification['details']}")
+                rewrite_result["verification"] = verification
+
+        return rewrite_result
     except Exception as e:
         progress.clear_timeout()
         logger.warning(f"rewrite_article failed on primary server: {e}")
@@ -138,8 +287,10 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
                 progress.clear_timeout()
                 message = data.get("message", {})
                 response_content = message.get("content", "")
+                fallback_result = None
+
                 if isinstance(response_content, dict):
-                    return {
+                    fallback_result = {
                         "title": response_content.get("title", ""),
                         "body": response_content.get("body", ""),
                         "author": response_content.get("author", ""),
@@ -155,10 +306,10 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
                     if content_clean.endswith("```"):
                         content_clean = content_clean[:-3]  # Remove closing ```
                     content_clean = content_clean.strip()
-                    
+
                     try:
                         obj = json.loads(content_clean)
-                        return {
+                        fallback_result = {
                             "title": obj.get("title", ""),
                             "body": obj.get("body", ""),
                             "author": obj.get("author", ""),
@@ -170,15 +321,39 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
                         if json_match:
                             try:
                                 obj = json.loads(json_match.group(0))
-                                return {
+                                fallback_result = {
                                     "title": obj.get("title", ""),
                                     "body": obj.get("body", ""),
                                     "author": obj.get("author", ""),
                                 }
                             except json.JSONDecodeError:
                                 pass
-                        logger.warning(f"Fallback server JSON parse error: {json_err}")
-                        raise  # Re-raise to continue error handling
+                        if not fallback_result:
+                            logger.warning(f"Fallback server JSON parse error: {json_err}")
+                            raise  # Re-raise to continue error handling
+
+                # Perform fact-checking on fallback result if enabled
+                if fallback_result and verify_facts:
+                    logger.info("Verifying factual accuracy of fallback rewrite...")
+                    verification = verify_article_facts(
+                        text,
+                        fallback_result.get("body", ""),
+                        base_url=fallback_base_url,
+                        model=model,
+                        timeout_s=120
+                    )
+
+                    logger.info(f"Fallback fact-check: accurate={verification['accurate']}, confidence={verification['confidence']:.2f}")
+
+                    if not verification["accurate"] and verification["confidence"] > 0.7:
+                        logger.warning(f"Fallback fact-check FAILED: {verification['details']}")
+                        if verification["issues"]:
+                            logger.warning(f"Issues found: {', '.join(verification['issues'])}")
+                        return None
+                    else:
+                        fallback_result["verification"] = verification
+
+                return fallback_result
             except Exception as e2:
                 progress.clear_timeout()
                 logger.error(f"rewrite_article failed on fallback server: {e2}", exc_info=True)

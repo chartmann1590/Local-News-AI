@@ -9,6 +9,20 @@ __pycache__/
 web/node_modules/
 web/dist/
 
+# Flutter build artifacts
+flutter_app/build/
+flutter_app/.dart_tool/
+flutter_app/.flutter-plugins*
+flutter_app/.packages
+flutter_app/.pub-cache/
+flutter_app/.pub/
+
+# Android/Gradle build artifacts
+flutter_app/android/.gradle/
+flutter_app/android/app/build/
+flutter_app/android/.idea/
+flutter_app/android/local.properties
+
 # Data volume (managed externally)
 data/
 

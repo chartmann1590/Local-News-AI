@@ -24,6 +24,7 @@ services:
       - FEED_EXTRA_URLS=${FEED_EXTRA_URLS:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - OPENWEATHERMAP_API_KEY=${OPENWEATHERMAP_API_KEY}
+      - ENABLE_FACT_CHECKING=${ENABLE_FACT_CHECKING:-true}
     volumes:
       - /mnt/h/News-AI/data:/data
     restart: unless-stopped

@@ -47,6 +47,13 @@ The News AI mobile app is a Flutter-based Android application that provides full
   - Connection testing
   - Settings accessible from app
 
+- **📺 Broadcast**: Watch video broadcasts of news and weather summaries
+  - Video player with playback controls
+  - Caption overlay with toggle
+  - Auto-refresh every 30 seconds
+  - Full transcript display
+  - SRT subtitle support
+
 ### Technical Features
 
 - **Offline Logging**: Comprehensive logging system for debugging
@@ -180,6 +187,30 @@ You can change the server configuration at any time from the Settings screen:
    - Play/pause weather report audio
    - Adjust playback position with slider
 
+### Broadcast Screen
+
+1. **Viewing Broadcasts**:
+   - Navigate to the Broadcast tab
+   - Watch the latest news and weather summary video
+   - Video includes voiceover and captions
+   - Auto-refreshes every 30 seconds to check for new broadcasts
+
+2. **Video Controls**:
+   - Play/pause video playback
+   - Seek through video with slider
+   - Fullscreen mode support
+   - Caption overlay toggle button
+
+3. **Refreshing**:
+   - Pull down to refresh manually
+   - Tap refresh icon in app bar
+   - Auto-refreshes every 30 seconds
+
+4. **Transcript**:
+   - Full transcript displayed below video
+   - Scrollable text view
+   - SRT subtitle support for external players
+
 ### Settings Screen
 
 #### Appearance
@@ -238,11 +269,13 @@ flutter_app/
 │   │   ├── news_screen.dart
 │   │   ├── article_detail_screen.dart
 │   │   ├── weather_screen.dart
+│   │   ├── broadcast_screen.dart
 │   │   └── settings_screen.dart
 │   ├── models/          # Data models
 │   │   ├── article.dart
 │   │   ├── weather.dart
 │   │   ├── chat_message.dart
+│   │   ├── broadcast.dart
 │   │   └── server_config.dart
 │   ├── services/        # Business logic
 │   │   ├── api_service.dart
@@ -252,9 +285,11 @@ flutter_app/
 │   ├── widgets/         # Reusable widgets
 │   │   ├── audio_player_widget.dart
 │   │   ├── article_card.dart
-│   │   └── chat_widget.dart
+│   │   ├── chat_widget.dart
+│   │   └── caption_overlay.dart
 │   └── utils/
-│       └── constants.dart
+│       ├── constants.dart
+│       └── srt_parser.dart
 ├── pubspec.yaml         # Dependencies
 └── README.md           # Flutter app README
 ```
@@ -286,6 +321,13 @@ The app communicates with the News AI backend using RESTful API endpoints:
 ### Weather
 
 - `GET /api/weather` - Get weather report and forecast
+
+### Broadcast
+
+- `GET /api/broadcast/latest` - Get the latest broadcast metadata
+- `GET /api/broadcasts?page=1&limit=10` - List recent broadcasts with pagination
+- `GET /api/broadcast/{id}/transcript` - Get transcript text for a broadcast
+- `GET /api/broadcast/{id}/srt` - Get SRT subtitle file for a broadcast
 
 ### Text-to-Speech
 

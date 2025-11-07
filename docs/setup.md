@@ -46,6 +46,32 @@ Open the app: http://localhost:18080
 - Tail logs: `docker compose logs -f`
 - Stop: `docker compose down`
 
+### Building Flutter APK (Optional)
+
+The Flutter Android APK can be built locally and will be included in the Docker image:
+
+1. **Prerequisites:**
+   - Flutter SDK 3.0.0 or later installed
+   - Android SDK configured
+   - Java Development Kit (JDK) installed
+
+2. **Build the APK:**
+   ```bash
+   cd flutter_app
+   flutter pub get
+   flutter build apk --release
+   ```
+
+3. **APK Location:**
+   The built APK will be at: `flutter_app/build/app/outputs/flutter-apk/app-release.apk`
+   
+   The Docker build process will automatically copy this APK to `app/static/news-ai-app.apk` if it exists.
+
+4. **Note:**
+   - The Docker build will succeed even if the APK is not pre-built (it will create a placeholder)
+   - The APK is optional and only needed if you want to distribute the mobile app
+   - For more details, see `docs/mobile-app.md`
+
 ### Browser cache tip
 
-- If UI styles don’t update (e.g., theme toggle seems ineffective), hard refresh the browser to clear cached assets and service worker content.
+- If UI styles don't update (e.g., theme toggle seems ineffective), hard refresh the browser to clear cached assets and service worker content.

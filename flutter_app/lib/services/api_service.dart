@@ -6,6 +6,7 @@ import '../models/article.dart';
 import '../models/weather.dart';
 import '../models/chat_message.dart';
 import '../models/server_config.dart';
+import '../models/broadcast.dart';
 import '../services/storage_service.dart';
 import '../services/logger_service.dart';
 import '../utils/constants.dart';
@@ -332,5 +333,57 @@ class ApiService {
     final queryString = params.entries.map((e) => '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}').join('&');
     final response = await _get('${Constants.articlesEndpoint}/bookmarked?$queryString', screenContext: screenContext ?? 'NewsScreen');
     return response;
+  }
+  
+  // Broadcast
+  static Future<Broadcast?> getBroadcastLatest({String? screenContext}) async {
+    try {
+      final response = await _get('${Constants.broadcastEndpoint}/latest', screenContext: screenContext ?? 'BroadcastScreen');
+      return Broadcast.fromJson(response);
+    } catch (e) {
+      if (e.toString().contains('404') || e.toString().contains('Failed to load: 404')) {
+        LoggerService().logInfo('API', 'GET Broadcast Latest', details: 'No broadcast found (404)');
+        return null;
+      }
+      LoggerService().logError('API', 'GET Broadcast Latest', e);
+      rethrow;
+    }
+  }
+  
+  static Future<String> getBroadcastVideoUrl(int broadcastId) async {
+    final baseUrl = await getBaseUrl();
+    if (baseUrl == null) {
+      throw Exception('Server not configured');
+    }
+    return '$baseUrl${Constants.broadcastEndpoint}/$broadcastId/video';
+  }
+  
+  static Future<String> getBroadcastSrt(int broadcastId, {String? screenContext}) async {
+    final baseUrl = await getBaseUrl();
+    if (baseUrl == null) {
+      throw Exception('Server not configured');
+    }
+    
+    final url = Uri.parse('$baseUrl${Constants.broadcastEndpoint}/$broadcastId/srt');
+    LoggerService().logInfo('API', 'GET Broadcast SRT', details: 'URL: $url, Screen: ${screenContext ?? "Unknown"}');
+    
+    try {
+      final response = await http
+          .get(url, headers: {'Content-Type': 'text/plain'})
+          .timeout(Constants.connectionTimeout);
+      
+      LoggerService().logInfo('API', 'GET Broadcast SRT Response', details: 'Status: ${response.statusCode}');
+      
+      if (response.statusCode == 200) {
+        return response.body;
+      } else {
+        final error = Exception('Failed to load SRT: ${response.statusCode}');
+        LoggerService().logError('API', 'GET Broadcast SRT', error, details: 'Status: ${response.statusCode}');
+        throw error;
+      }
+    } catch (e) {
+      LoggerService().logError('API', 'GET Broadcast SRT', e, details: 'URL: $url');
+      rethrow;
+    }
   }
 }

@@ -23,6 +23,9 @@ dependencies:
   # Audio
   audioplayers: ^5.2.1
   
+  # Video
+  video_player: ^2.8.2
+  
   # WebView
   webview_flutter: ^4.4.2
   

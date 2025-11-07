@@ -36,6 +36,10 @@ LOGS_PER_MIN_LIMIT = int(os.getenv("LOGS_RATE_LIMIT_PER_MIN", "10"))
 _LOGS_RL_LOCK = threading.Lock()
 _LOGS_RL: dict[str, deque] = defaultdict(deque)  # key: ip
 
+# In-memory log buffer for app logs
+_APP_LOGS_LOCK = threading.Lock()
+_APP_LOGS_BUFFER = deque(maxlen=500)  # Keep last 500 log entries
+
 def _logs_rate_limited(ip: str) -> bool:
     try:
         now = time.time()
@@ -87,6 +91,25 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger("app")
+
+# Custom handler to capture logs in memory
+class MemoryLogHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            log_entry = {
+                "timestamp": datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S,%f")[:-3],
+                "level": record.levelname,
+                "message": self.format(record),
+            }
+            with _APP_LOGS_LOCK:
+                _APP_LOGS_BUFFER.append(log_entry)
+        except Exception:
+            pass
+
+# Add memory handler to root logger to catch all logs
+memory_handler = MemoryLogHandler()
+memory_handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
+logging.getLogger().addHandler(memory_handler)
 
 
 def _db_operation_with_retry(operation, max_retries=3, retry_delay=1.0):
@@ -302,6 +325,51 @@ def run_now():
     except Exception as e:
         logger.exception("api:run_now:error")
         return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
+
+
+@app.get("/api/logs")
+def api_get_logs(level: Optional[str] = None, limit: int = 100, offset: int = 0):
+    """
+    Get application logs with optional filtering.
+
+    Query params:
+    - level: Filter by log level (ERROR, WARNING, INFO, DEBUG) - case insensitive
+    - limit: Maximum number of log entries to return (default: 100, max: 500)
+    - offset: Number of entries to skip (for pagination)
+    """
+    try:
+        # Limit constraints
+        limit = min(max(1, limit), 500)
+        offset = max(0, offset)
+
+        # Get logs from memory buffer
+        with _APP_LOGS_LOCK:
+            all_logs = list(_APP_LOGS_BUFFER)
+
+        # Filter by level if specified
+        if level:
+            level_upper = level.upper()
+            filtered_logs = [log for log in all_logs if log["level"] == level_upper]
+        else:
+            filtered_logs = all_logs
+
+        # Reverse to show most recent first
+        filtered_logs.reverse()
+
+        # Apply pagination
+        paginated_logs = filtered_logs[offset:offset + limit]
+
+        return {
+            "logs": paginated_logs,
+            "total": len(filtered_logs),
+            "offset": offset,
+            "limit": limit,
+            "filtered_by": level
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to fetch logs: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 def _latest_weather(session: SessionLocal) -> Optional[WeatherReport]:
@@ -1243,6 +1311,11 @@ def api_get_settings():
             s = AppSettings(id=1, temp_unit='F', wind_speed_unit='mph')
             session.add(s)
             session.commit()
+
+        # Get fact-checking status from environment
+        import os
+        enable_fact_checking = os.environ.get("ENABLE_FACT_CHECKING", "true").lower() in ("true", "1", "yes")
+
         # Always return DB values - use defaults if not set by user
         return {
             "ollama_base_url": s.ollama_base_url if s else None,
@@ -1250,6 +1323,7 @@ def api_get_settings():
             "ollama_fallback_base_url": s.ollama_fallback_base_url if s else None,
             "temp_unit": s.temp_unit if s.temp_unit else "F",
             "wind_speed_unit": s.wind_speed_unit if s.wind_speed_unit else "mph",
+            "fact_checking_enabled": enable_fact_checking,
         }
     finally:
         session.close()

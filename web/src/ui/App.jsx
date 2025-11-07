@@ -650,6 +650,9 @@ export default function App() {
   const [bookmarksPage, setBookmarksPage] = useState(1)
   const [bookmarksPages, setBookmarksPages] = useState(1)
   const [showBroadcast, setShowBroadcast] = useState(false)
+  const [showAppLogs, setShowAppLogs] = useState(false)
+  const [appLogs, setAppLogs] = useState({ logs: [], total: 0, offset: 0, limit: 100 })
+  const [appLogsLevel, setAppLogsLevel] = useState('')
 
   async function loadAll() {
     const t0 = performance.now()
@@ -733,6 +736,28 @@ export default function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showBookmarks, bookmarksPage])
+
+  // Load application logs
+  async function loadAppLogs() {
+    try {
+      const params = new URLSearchParams()
+      params.set('limit', '100')
+      if (appLogsLevel) params.set('level', appLogsLevel)
+      const res = await fetch(`/api/logs?${params.toString()}`)
+      if (!res.ok) throw new Error('Failed to load logs')
+      const data = await res.json()
+      setAppLogs(data)
+    } catch (e) {
+      console.error('Failed to load application logs', e)
+    }
+  }
+
+  useEffect(() => {
+    if (showAppLogs) {
+      loadAppLogs()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAppLogs, appLogsLevel])
 
   // Initial load and auto-refresh
   useEffect(() => {
@@ -860,7 +885,10 @@ export default function App() {
           {showFilters ? '▼' : '▶'} Filters
         </button>
         <button onClick={()=>setShowLogsPanel(v=>!v)} className="px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm hover:bg-slate-50 dark:hover:bg-slate-800">
-          {showLogsPanel ? 'Hide Logs' : 'Show Logs'}
+          {showLogsPanel ? 'Hide Mobile Logs' : '📱 Mobile Logs'}
+        </button>
+        <button onClick={()=>setShowAppLogs(v=>!v)} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm ${showAppLogs ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-800'}`}>
+          {showAppLogs ? '📋 Hide App Logs' : '📋 App Logs'}
         </button>
         {(searchQuery || filterSource || sortBy !== 'date_desc') && (
           <button onClick={() => { setSearchQuery(''); setFilterSource(''); setSortBy('date_desc'); setPage(1); }} className="px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm hover:bg-slate-50 dark:hover:bg-slate-800">
@@ -906,6 +934,159 @@ export default function App() {
         {showBroadcast ? (
           <div className="space-y-4">
             <Broadcast />
+          </div>
+        ) : showAppLogs ? (
+          <div className="space-y-4">
+            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200/60 dark:border-slate-700/60 overflow-hidden">
+              <div className="p-5 border-b border-slate-200/60 dark:border-slate-700/60 flex items-center gap-2 flex-wrap">
+                <div className="text-2xl">📋</div>
+                <div className="font-semibold">Application Logs</div>
+                <div className="ml-auto flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => setAppLogsLevel('')}
+                    className={`px-3 py-1.5 rounded-md text-sm ${!appLogsLevel ? 'bg-blue-600 text-white' : 'border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
+                  >
+                    All
+                  </button>
+                  <button
+                    onClick={() => setAppLogsLevel('ERROR')}
+                    className={`px-3 py-1.5 rounded-md text-sm ${appLogsLevel === 'ERROR' ? 'bg-red-600 text-white' : 'border border-red-300 dark:border-red-700 text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20'}`}
+                  >
+                    Errors
+                  </button>
+                  <button
+                    onClick={() => setAppLogsLevel('WARNING')}
+                    className={`px-3 py-1.5 rounded-md text-sm ${appLogsLevel === 'WARNING' ? 'bg-amber-600 text-white' : 'border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20'}`}
+                  >
+                    Warnings
+                  </button>
+                  <button
+                    onClick={() => setAppLogsLevel('INFO')}
+                    className={`px-3 py-1.5 rounded-md text-sm ${appLogsLevel === 'INFO' ? 'bg-blue-600 text-white' : 'border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
+                  >
+                    Info
+                  </button>
+                  <button
+                    onClick={loadAppLogs}
+                    className="px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm hover:bg-slate-50 dark:hover:bg-slate-800"
+                    title="Refresh logs"
+                  >
+                    🔄 Refresh
+                  </button>
+                </div>
+              </div>
+              <div className="overflow-auto" style={{maxHeight: '70vh'}}>
+                {appLogs.logs && appLogs.logs.length > 0 ? (
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-50 dark:bg-slate-900/40 sticky top-0">
+                      <tr>
+                        <th className="text-left px-3 py-2 w-40">Timestamp</th>
+                        <th className="text-left px-3 py-2 w-20">Level</th>
+                        <th className="text-left px-3 py-2">Message</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {appLogs.logs.map((log, idx) => (
+                        <tr key={idx} className="border-t border-slate-200/60 dark:border-slate-700/60 hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                          <td className="px-3 py-2 text-xs font-mono text-slate-600 dark:text-slate-300 align-top">{log.timestamp || '-'}</td>
+                          <td className="px-3 py-2 align-top">
+                            <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                              log.level === 'ERROR' ? 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300' :
+                              log.level === 'WARNING' ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300' :
+                              log.level === 'INFO' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300' :
+                              'bg-slate-100 text-slate-800 dark:bg-slate-700/40 dark:text-slate-300'
+                            }`}>
+                              {log.level}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-xs font-mono whitespace-pre-wrap break-words">{log.message}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="p-5 text-center text-slate-500">No logs available. Logs appear as the application runs.</div>
+                )}
+              </div>
+              <div className="p-3 border-t border-slate-200/60 dark:border-slate-700/60 text-xs text-slate-500">
+                Showing {appLogs.logs?.length || 0} of {appLogs.total || 0} logs {appLogsLevel && `(filtered by ${appLogsLevel})`}
+                <span className="ml-3 text-slate-400">• Last 500 entries in memory • Most recent first</span>
+              </div>
+            </div>
+          </div>
+        ) : showLogsPanel ? (
+          <div className="space-y-4">
+            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200/60 dark:border-slate-700/60 overflow-hidden">
+              <div className="p-5 border-b border-slate-200/60 dark:border-slate-700/60 flex items-center gap-2 flex-wrap">
+                <div className="text-2xl">📱</div>
+                <div className="font-semibold">Mobile Logs</div>
+                <div className="ml-auto flex items-center gap-2 flex-wrap">
+                  <input value={logsQuery.q} onChange={e=>setLogsQuery(q=>({...q, q: e.target.value}))} placeholder="Search" className="px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                  <select value={logsQuery.platform} onChange={e=>setLogsQuery(q=>({...q, platform: e.target.value}))} className="px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800">
+                    <option value="">All</option>
+                    <option value="android">Android</option>
+                    <option value="ios">iOS</option>
+                  </select>
+                  <input value={logsQuery.deviceId} onChange={e=>setLogsQuery(q=>({...q, deviceId: e.target.value}))} placeholder="Device ID" className="px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                  <button onClick={()=>loadLogs(1)} className="px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm hover:bg-slate-50 dark:hover:bg-slate-800">Filter</button>
+                </div>
+              </div>
+              <div className="grid md:grid-cols-2" style={{maxHeight: '70vh'}}>
+                <div className="overflow-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-50 dark:bg-slate-900/40 sticky top-0">
+                      <tr>
+                        <th className="text-left px-3 py-2">Uploaded</th>
+                        <th className="text-left px-3 py-2">Device</th>
+                        <th className="text-left px-3 py-2">Platform</th>
+                        <th className="text-left px-3 py-2">Version</th>
+                        <th className="text-left px-3 py-2">Size</th>
+                        <th className="text-left px-3 py-2">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(logs.items || []).length > 0 ? (
+                        logs.items.map(it => (
+                          <tr key={it.id} className={`border-t border-slate-200/60 dark:border-slate-700/60 ${selectedLog?.id===it.id?'bg-blue-50/40 dark:bg-blue-900/20':''}`}>
+                            <td className="px-3 py-2">{it.uploaded_at ? new Date(it.uploaded_at).toLocaleString() : '-'}</td>
+                            <td className="px-3 py-2 font-mono text-xs">{it.device_id || '-'}</td>
+                            <td className="px-3 py-2">{it.platform}</td>
+                            <td className="px-3 py-2">{it.app_version || '-'}</td>
+                            <td className="px-3 py-2">{Math.round((it.file_size_bytes||0)/1024)} KB</td>
+                            <td className="px-3 py-2 space-x-2">
+                              <button onClick={async()=>{ const r = await fetch(`/api/logs/${it.id}`); if(r.ok){ setSelectedLog(await r.json()) } }} className="text-blue-600 hover:underline">View</button>
+                              <a href={`/api/logs/${it.id}/download`} className="text-blue-600 hover:underline">Download</a>
+                              <button onClick={async()=>{ if(!confirm('Delete this log?')) return; await fetch(`/api/logs/${it.id}`, { method:'DELETE' }); await loadLogs(logs.page); if(selectedLog?.id===it.id) setSelectedLog(null) }} className="text-red-600 hover:underline">Delete</button>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan="6" className="px-3 py-8 text-center text-slate-500">No mobile logs uploaded yet.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                  <div className="flex items-center justify-between px-3 py-2 border-t border-slate-200/60 dark:border-slate-700/60">
+                    <div className="text-xs text-slate-500">Page {logs.page} of {Math.max(1, Math.ceil((logs.total||0)/(logs.pageSize||20)))}</div>
+                    <div className="flex items-center gap-2">
+                      <button disabled={logs.page<=1} onClick={()=>loadLogs((logs.page||1)-1)} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm ${logs.page<=1 ? 'opacity-50' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'}`}>Prev</button>
+                      <button disabled={(logs.page||1) >= Math.max(1, Math.ceil((logs.total||0)/(logs.pageSize||20)))} onClick={()=>loadLogs((logs.page||1)+1)} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-sm ${((logs.page||1) >= Math.max(1, Math.ceil((logs.total||0)/(logs.pageSize||20)))) ? 'opacity-50' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'}`}>Next</button>
+                    </div>
+                  </div>
+                </div>
+                <div className="border-l border-slate-200/60 dark:border-slate-700/60 p-4 overflow-auto">
+                  {!selectedLog ? (
+                    <div className="text-slate-500 text-sm">Select a log to preview.</div>
+                  ) : (
+                    <div className="h-full flex flex-col">
+                      <div className="text-sm mb-2">Log <span className="font-mono">{selectedLog.id}</span> · {selectedLog.app_version || '-'} · {selectedLog.platform}</div>
+                      <pre className="flex-1 overflow-auto whitespace-pre-wrap text-xs bg-slate-50 dark:bg-slate-900/40 p-3 rounded-md border border-slate-200/60 dark:border-slate-700/60">{selectedLog.preview || ''}</pre>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         ) : (
           <div className="grid md:grid-cols-3 gap-6">
@@ -974,7 +1155,7 @@ export default function App() {
             {showLogsPanel && (
               <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200/60 dark:border-slate-700/60 overflow-hidden">
                 <div className="p-5 border-b border-slate-200/60 dark:border-slate-700/60 flex items-center gap-2">
-                  <div className="text-2xl">📋</div>
+                  <div className="text-2xl">📱</div>
                   <div className="font-semibold">Mobile Logs</div>
                   <div className="ml-auto flex items-center gap-2">
                     <input value={logsQuery.q} onChange={e=>setLogsQuery(q=>({...q, q: e.target.value}))} placeholder="Search" className="px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800" />
@@ -1001,20 +1182,26 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {logs.items.map(it => (
-                          <tr key={it.id} className={`border-t border-slate-200/60 dark:border-slate-700/60 ${selectedLog?.id===it.id?'bg-blue-50/40 dark:bg-blue-900/20':''}`}>
-                            <td className="px-3 py-2">{it.uploaded_at ? new Date(it.uploaded_at).toLocaleString() : '-'}</td>
-                            <td className="px-3 py-2 font-mono text-xs">{it.device_id || '-'}</td>
-                            <td className="px-3 py-2">{it.platform}</td>
-                            <td className="px-3 py-2">{it.app_version || '-'}</td>
-                            <td className="px-3 py-2">{Math.round((it.file_size_bytes||0)/1024)} KB</td>
-                            <td className="px-3 py-2 space-x-2">
-                              <button onClick={async()=>{ const r = await fetch(`/api/logs/${it.id}`); if(r.ok){ setSelectedLog(await r.json()) } }} className="text-blue-600 hover:underline">View</button>
-                              <a href={`/api/logs/${it.id}/download`} className="text-blue-600 hover:underline">Download</a>
-                              <button onClick={async()=>{ if(!confirm('Delete this log?')) return; await fetch(`/api/logs/${it.id}`, { method:'DELETE' }); await loadLogs(logs.page); if(selectedLog?.id===it.id) setSelectedLog(null) }} className="text-red-600 hover:underline">Delete</button>
-                            </td>
+                        {(logs.items || []).length > 0 ? (
+                          logs.items.map(it => (
+                            <tr key={it.id} className={`border-t border-slate-200/60 dark:border-slate-700/60 ${selectedLog?.id===it.id?'bg-blue-50/40 dark:bg-blue-900/20':''}`}>
+                              <td className="px-3 py-2">{it.uploaded_at ? new Date(it.uploaded_at).toLocaleString() : '-'}</td>
+                              <td className="px-3 py-2 font-mono text-xs">{it.device_id || '-'}</td>
+                              <td className="px-3 py-2">{it.platform}</td>
+                              <td className="px-3 py-2">{it.app_version || '-'}</td>
+                              <td className="px-3 py-2">{Math.round((it.file_size_bytes||0)/1024)} KB</td>
+                              <td className="px-3 py-2 space-x-2">
+                                <button onClick={async()=>{ const r = await fetch(`/api/logs/${it.id}`); if(r.ok){ setSelectedLog(await r.json()) } }} className="text-blue-600 hover:underline">View</button>
+                                <a href={`/api/logs/${it.id}/download`} className="text-blue-600 hover:underline">Download</a>
+                                <button onClick={async()=>{ if(!confirm('Delete this log?')) return; await fetch(`/api/logs/${it.id}`, { method:'DELETE' }); await loadLogs(logs.page); if(selectedLog?.id===it.id) setSelectedLog(null) }} className="text-red-600 hover:underline">Delete</button>
+                              </td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan="6" className="px-3 py-8 text-center text-slate-500">No mobile logs uploaded yet.</td>
                           </tr>
-                        ))}
+                        )}
                       </tbody>
                     </table>
                     <div className="flex items-center justify-between px-3 py-2 border-t border-slate-200/60 dark:border-slate-700/60">
@@ -1324,6 +1511,7 @@ function SettingsPanel({ onClose, reloadAll }) {
     tts_base_url: '',
     tts_voice: '',
     tts_speed: 1.0,
+    fact_checking_enabled: true,
   })
   const [models, setModels] = useState([])
   const [testing, setTesting] = useState(false)
@@ -1355,6 +1543,7 @@ function SettingsPanel({ onClose, reloadAll }) {
           tts_base_url: ts.base_url || 'http://tts:5500',
           tts_voice: ts.voice || '',
           tts_speed: ts.speed || 1.0,
+          fact_checking_enabled: s.fact_checking_enabled !== undefined ? s.fact_checking_enabled : true,
         }))
         if (s.ollama_base_url) {
           const m = await fetch('/api/ollama/models?base_url=' + encodeURIComponent(s.ollama_base_url)).then(r => r.json())
@@ -1556,102 +1745,40 @@ function SettingsPanel({ onClose, reloadAll }) {
           </section>
 
           <section>
+            <div className="font-medium mb-2">AI Fact-Checking</div>
+            <div className="rounded-lg border border-slate-200/60 dark:border-slate-700/60 bg-slate-50 dark:bg-slate-800 p-3">
+              <div className="flex items-center gap-3 mb-2">
+                <span className={`inline-block px-3 py-1.5 rounded-md text-sm font-medium ${form.fact_checking_enabled ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300'}`}>
+                  {form.fact_checking_enabled ? '✓ Enabled' : '✗ Disabled'}
+                </span>
+              </div>
+              <div className="text-xs text-slate-600 dark:text-slate-400 space-y-1">
+                <p>Fact-checking verifies that AI-rewritten articles maintain factual accuracy by checking:</p>
+                <ul className="list-disc list-inside ml-2 space-y-0.5">
+                  <li>Names, dates, and numbers remain unchanged</li>
+                  <li>Key events and facts are preserved</li>
+                  <li>Quotes are accurate (if present)</li>
+                </ul>
+                <p className="mt-2 italic">
+                  {form.fact_checking_enabled ?
+                    'Adds 2-3 minutes per article but prevents misinformation.' :
+                    'Disabled for faster processing. Enable via ENABLE_FACT_CHECKING in .env file.'
+                  }
+                </p>
+                <p className="mt-2">
+                  <a href="/static/FACT_CHECKING.md" target="_blank" className="text-blue-600 hover:underline dark:text-blue-400">
+                    View fact-checking documentation →
+                  </a>
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section>
             <div className="font-medium mb-2">Text-to-Speech</div>
             <div className="flex items-center gap-3 mb-2">
               <label className="inline-flex items-center gap-2"><input type="checkbox" checked={!!form.tts_enabled} onChange={e=>setForm(f=>({...f, tts_enabled: e.target.checked}))}/> <span>Enable TTS</span></label>
             </div>
             <div className="flex items-center gap-2">
               <input value={form.tts_base_url} onChange={e=>setForm(f=>({...f, tts_base_url: e.target.value}))} placeholder="http://tts:5500" className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 flex-1" />
-              <button onClick={refreshVoices} className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700">Refresh Voices</button>
-            </div>
-            <div className="mt-3 flex items-center gap-2">
-              <label className="text-sm text-slate-600 dark:text-slate-300 mr-2">Voice</label>
-              <select value={form.tts_voice} onChange={e=>setForm(f=>({...f, tts_voice: e.target.value}))} className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800">
-                <option value="">(auto)</option>
-                {voices.map(v => <option key={v.name} value={v.name}>{(v.label||v.name)}{v.locale?` · ${v.locale}`:''}</option>)}
-              </select>
-              <button onClick={previewTts} className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700" disabled={pvBusy || !form.tts_enabled}>{pvBusy ? 'Preview…' : 'Preview'}</button>
-            </div>
-            {previewUrl && (
-              <div className="mt-2">
-                <AudioPlayer src={previewUrl} />
-              </div>
-            )}
-          </section>
-
-          <section>
-            <div className="font-medium mb-2">Install App</div>
-            {!pwaInstalled ? (
-              <div className="rounded-lg border border-slate-200/60 dark:border-slate-700/60 bg-white dark:bg-slate-800 p-3 text-sm flex items-center gap-3 flex-wrap">
-                <button
-                  onClick={installPwa}
-                  disabled={!pwaCanInstall}
-                  className={`px-3 py-1.5 rounded-md ${pwaCanInstall ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'}`}
-                  title={pwaCanInstall ? 'Install this app' : 'Use your browser menu to add to home screen'}
-                >
-                  {pwaCanInstall ? 'Install' : 'Install via Browser Menu'}
-                </button>
-                {!pwaCanInstall && (
-                  <span className="text-slate-500">
-                    On iPhone/iPad: Share → Add to Home Screen
-                  </span>
-                )}
-              </div>
-            ) : (
-              <div className="text-sm text-emerald-600 dark:text-emerald-400">App is installed on this device.</div>
-            )}
-          </section>
-
-          <section>
-            <div className="font-medium mb-2">Maintenance</div>
-            <div className="rounded-lg border border-slate-200/60 dark:border-slate-700/60 bg-white dark:bg-slate-800 p-3 text-sm flex items-center gap-3 flex-wrap">
-              <button onClick={doDedup} disabled={mBusy} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 ${mBusy ? 'opacity-60' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'}`}>
-                Deduplicate by Title
-              </button>
-              <div className="flex items-center gap-2">
-                <button onClick={doRewriteMissing} disabled={mBusy} className={`px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 ${mBusy ? 'opacity-60' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'}`}>
-                  Rewrite Missing
-                </button>
-                <label className="text-slate-500">Limit</label>
-                <input value={mLimit} onChange={e=>setMLimit(e.target.value)} inputMode="numeric" pattern="[0-9]*" className="w-20 px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800" />
-                <span className="text-slate-400">0 = all</span>
-              </div>
-              {mMsg && <span className="ml-auto text-slate-600 dark:text-slate-300">{mMsg}</span>}
-            </div>
-            <div className="text-xs text-slate-500 mt-2">Dedup removes articles with the same title, keeping the most recently updated.</div>
-          </section>
-
-          <section>
-            <div className="font-medium mb-2">Weather Units</div>
-            <div className="flex items-center gap-3">
-              <label className="inline-flex items-center gap-2"><input type="radio" name="unit" checked={(form.temp_unit||'F')==='F'} onChange={()=>setForm(f=>({...f, temp_unit:'F'}))}/> <span>Fahrenheit (°F)</span></label>
-              <label className="inline-flex items-center gap-2"><input type="radio" name="unit" checked={(form.temp_unit||'F')==='C'} onChange={()=>setForm(f=>({...f, temp_unit:'C'}))}/> <span>Celsius (°C)</span></label>
-            </div>
-            <div className="text-xs text-slate-500 mt-1 mb-3">Changing units triggers a fresh forecast fetch and AI weather report.</div>
-            <div className="flex items-center gap-3">
-              <label className="inline-flex items-center gap-2"><input type="radio" name="wind_unit" checked={(form.wind_speed_unit||'mph')==='mph'} onChange={()=>setForm(f=>({...f, wind_speed_unit:'mph'}))}/> <span>Miles per hour (mph)</span></label>
-              <label className="inline-flex items-center gap-2"><input type="radio" name="wind_unit" checked={(form.wind_speed_unit||'mph')==='kmh'} onChange={()=>setForm(f=>({...f, wind_speed_unit:'kmh'}))}/> <span>Kilometers per hour (km/h)</span></label>
-            </div>
-          </section>
-
-          <section>
-            <div className="font-medium mb-2">Location</div>
-            <div className="flex items-center gap-2">
-              <form onSubmit={saveLocation} className="flex items-center gap-2 flex-1">
-                <input name="loc" placeholder="City, State or ZIP" className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 flex-1" />
-                <button className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700">Save</button>
-              </form>
-              <button onClick={autoDetect} className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700">Auto‑detect</button>
-            </div>
-          </section>
-
-          <div className="flex items-center justify-end gap-2">
-            <button onClick={onClose} className="px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700">Cancel</button>
-            <button onClick={saveSettings} className="px-3 py-2 rounded-md bg-blue-600 text-white">Save</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
+              <button onClick={refre

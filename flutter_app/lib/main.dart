@@ -11,6 +11,7 @@ import 'screens/server_config_screen.dart';
 import 'screens/splash_screen.dart';
 import 'screens/news_screen.dart';
 import 'screens/weather_screen.dart';
+import 'screens/broadcast_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/article_detail_screen.dart';
 import 'models/article.dart';
@@ -207,10 +208,11 @@ class _MainScreenState extends State<MainScreen> {
   final List<Widget> _screens = [
     const NewsScreen(),
     const WeatherScreen(),
+    const BroadcastScreen(),
     const SettingsScreen(),
   ];
   
-  final List<String> _screenNames = ['NewsScreen', 'WeatherScreen', 'SettingsScreen'];
+  final List<String> _screenNames = ['NewsScreen', 'WeatherScreen', 'BroadcastScreen', 'SettingsScreen'];
   
   @override
   void initState() {
@@ -258,6 +260,11 @@ class _MainScreenState extends State<MainScreen> {
             icon: Icon(Icons.wb_sunny_outlined),
             selectedIcon: Icon(Icons.wb_sunny),
             label: 'Weather',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.videocam_outlined),
+            selectedIcon: Icon(Icons.videocam),
+            label: 'Broadcast',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),
