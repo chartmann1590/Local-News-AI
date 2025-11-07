@@ -9,6 +9,12 @@
 
 - Re‑queue AI rewrites for items with missing AI text or fallback content from Settings → Maintenance → Rewrite Missing (with optional limit) or `POST /api/maintenance/rewrite-missing?limit=50`.
 
+## Analyze Existing Articles
+
+- Re-analyze existing published articles using AI quality analysis to identify and unpublish low-quality articles. Uses the quality threshold from settings (default 60) to determine which articles should remain published.
+- Available from Settings → Maintenance → Analyze Existing Articles (with optional limit) or `POST /api/maintenance/analyze-existing?limit=50`.
+- Articles identified as garbage or below the quality threshold will be marked as unpublished and their URLs will be added to the rejected URLs list to prevent re-fetching.
+
 ## Database
 
 - SQLite file lives at `./data/app.db` (host) → `/data/app.db` (container). Back it up by copying while the app is stopped.

@@ -16,7 +16,7 @@ import time
 from .database import init_db, SessionLocal
 from sqlalchemy import func, case, or_, and_
 from sqlalchemy.exc import OperationalError, DatabaseError
-from .models import Article, WeatherReport, AppConfig, AppSettings, TTSSettings, ChatMessage, MobileLog, Bookmark, Broadcast
+from .models import Article, WeatherReport, AppConfig, AppSettings, TTSSettings, ChatMessage, MobileLog, Bookmark, Broadcast, RejectedUrl
 from .scheduler import start_scheduler, run_harvest_once, restart_scheduler
 from . import maintenance
 import threading
@@ -25,7 +25,8 @@ from .progress import progress
 from . import scheduler as scheduler_mod
 from urllib.parse import urlparse, urlunparse
 from .tts import TTSClient, DEFAULT_TTS_BASE
-from .ai import generate_article_comment
+from .broadcast import _generate_tts_with_chunking
+from .ai import generate_article_comment, analyze_article_quality
 from collections import defaultdict, deque
 import uuid
 import hashlib
@@ -297,6 +298,14 @@ def on_startup():
         try:
             run_harvest_once()
             logger.info("startup:first_run_completed")
+            # After first harvest, analyze existing articles to clean up garbage
+            # Run in smaller batches to avoid blocking
+            try:
+                from . import maintenance
+                maintenance.analyze_existing_articles(limit=50)
+                logger.info("startup:initial_quality_check_completed")
+            except Exception:
+                logger.exception("startup:initial_quality_check_failed")
         except Exception:
             logger.exception("startup:first_run_failed")
 
@@ -1446,6 +1455,40 @@ def api_tts_get_settings():
                     s = TTSSettings(id=1, enabled=True, base_url=base_url)
                 else:
                     s.enabled = True
+                # If no voice selected yet, pick a sensible default
+                if not s.voice:
+                    chosen = None
+                    # Prefer robust engines for English first
+                    engine_pref = [
+                        "larynx",
+                        "nanotts",
+                        "piper",
+                        "coqui-tts",
+                        "marytts",
+                        "espeak",
+                    ]
+                    for eng in engine_pref:
+                        for v in voices:
+                            if not isinstance(v, dict):
+                                continue
+                            locale = (v.get("locale") or v.get("lang") or v.get("language") or "").lower()
+                            engine = (v.get("engine") or v.get("tts_name") or v.get("type") or "").lower()
+                            vid = v.get("key") or v.get("id") or v.get("name")
+                            if vid and engine == eng and (locale.startswith("en") or (isinstance(vid, str) and "en" in vid.lower())):
+                                chosen = vid
+                                break
+                        if chosen:
+                            break
+                    # Fallback: first voice id
+                    if not chosen:
+                        for v in voices:
+                            if isinstance(v, dict):
+                                vid = v.get("key") or v.get("id") or v.get("name")
+                                if vid:
+                                    chosen = vid
+                                    break
+                    if chosen:
+                        s.voice = chosen
                 session.merge(s)
                 session.commit()
                 enabled = True
@@ -1535,6 +1578,9 @@ def api_tts_article(article_id: int, voice: Optional[str] = None):
             return JSONResponse(status_code=404, content={"error": "article not found"})
         # Use ai_body if available, otherwise fallback to raw_content
         txt = a.ai_body or a.raw_content
+        # Cap extremely long texts to avoid engine failures in on-demand endpoint
+        if txt and len(txt) > 2000:
+            txt = txt[:1500]
         if not txt:
             return JSONResponse(status_code=404, content={"error": "article content is empty"})
         vv = voice or (tset.voice or None)
@@ -1542,10 +1588,24 @@ def api_tts_article(article_id: int, voice: Optional[str] = None):
     finally:
         session.close()
     client = TTSClient(base_url=base)
-    wav = client.synthesize_wav(txt, voice=vv)
-    if wav is None:
+    # Try robust chunking path first
+    import tempfile, shutil
+    temp_dir = tempfile.mkdtemp(prefix="tts_", dir="/data" if os.path.exists("/data") else None)
+    try:
+        result = _generate_tts_with_chunking(client, txt, vv, timeout=1800, temp_dir=temp_dir, segment_name=f"article_{article_id}")
+        if result is not None:
+            wav, _dur = result
+            return Response(content=wav, media_type="audio/wav")
+        # Fallback to direct synth with auto voice
+        wav2 = client.synthesize_wav(txt, voice=None)
+        if wav2 is not None:
+            return Response(content=wav2, media_type="audio/wav")
         return JSONResponse(status_code=502, content={"error": "tts synthesis failed"})
-    return Response(content=wav, media_type="audio/wav")
+    finally:
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 @app.get("/api/tts/weather")
@@ -1569,10 +1629,22 @@ def api_tts_weather(voice: Optional[str] = None):
     finally:
         session.close()
     client = TTSClient(base_url=base)
-    wav = client.synthesize_wav(txt, voice=vv)
-    if wav is None:
+    import tempfile, shutil
+    temp_dir = tempfile.mkdtemp(prefix="tts_", dir="/data" if os.path.exists("/data") else None)
+    try:
+        result = _generate_tts_with_chunking(client, txt, vv, timeout=1800, temp_dir=temp_dir, segment_name="weather")
+        if result is not None:
+            wav, _dur = result
+            return Response(content=wav, media_type="audio/wav")
+        wav2 = client.synthesize_wav(txt, voice=None)
+        if wav2 is not None:
+            return Response(content=wav2, media_type="audio/wav")
         return JSONResponse(status_code=502, content={"error": "tts synthesis failed"})
-    return Response(content=wav, media_type="audio/wav")
+    finally:
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 @app.post("/api/tts/preview")
@@ -1594,10 +1666,22 @@ def api_tts_preview(payload: dict):
     finally:
         session.close()
     client = TTSClient(base_url=base)
-    wav = client.synthesize_wav(text, voice=vv)
-    if wav is None:
+    import tempfile, shutil
+    temp_dir = tempfile.mkdtemp(prefix="tts_", dir="/data" if os.path.exists("/data") else None)
+    try:
+        result = _generate_tts_with_chunking(client, text, vv, timeout=1800, temp_dir=temp_dir, segment_name="preview")
+        if result is not None:
+            wav, _dur = result
+            return Response(content=wav, media_type="audio/wav")
+        wav2 = client.synthesize_wav(text, voice=None)
+        if wav2 is not None:
+            return Response(content=wav2, media_type="audio/wav")
         return JSONResponse(status_code=502, content={"error": "tts synthesis failed"})
-    return Response(content=wav, media_type="audio/wav")
+    finally:
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 # ----- Broadcast endpoints -----
@@ -1906,6 +1990,20 @@ def api_maintenance_rewrite_missing(limit: int | None = None):
             maintenance.rewrite_missing_articles(limit=limit)
         except Exception:
             logger.exception("maintenance_rewrite_missing_failed")
+    threading.Thread(target=_bg, daemon=True).start()
+    return {"status": "queued"}
+
+
+@app.post("/api/maintenance/analyze-existing-articles")
+def api_maintenance_analyze_existing_articles(limit: int | None = None):
+    """Re-analyze existing published articles and mark low-quality ones as unpublished."""
+    def _bg():
+        try:
+            res = maintenance.analyze_existing_articles(limit=limit)
+            logger.info("maintenance_analyze_existing_complete", extra=res)
+        except Exception:
+            logger.exception("maintenance_analyze_existing_failed")
+    
     threading.Thread(target=_bg, daemon=True).start()
     return {"status": "queued"}
 

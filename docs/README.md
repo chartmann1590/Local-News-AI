@@ -13,7 +13,7 @@ This folder holds the in‑depth docs. The root README gives a friendly overview
 - Deployment: `deployment.md`
 - Troubleshooting: `troubleshooting.md`
 - API Reference: `api.md`
-- Fact Checking: `../FACT_CHECKING.md`
+- Fact Checking: `FACT_CHECKING.md`
 
 ## Feature Summary (context)
 

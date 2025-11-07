@@ -21,7 +21,7 @@ services:
       - SCHEDULE_EVENING=${SCHEDULE_EVENING:-19:30}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - TTS_BASE_URL=${TTS_BASE_URL:-http://tts:5500}
-      - FEED_EXTRA_URLS=${FEED_EXTRA_URLS:-https://dailygazette.com/feed/,https://www.timesunion.com/local/?service=rss,https://www.troyrecord.com/feed/,https://spectrumlocalnews.com/nys/capital-region.rss,https://wnyt.com/feed/}
+      - FEED_EXTRA_URLS=${FEED_EXTRA_URLS:-https://www.timesunion.com/local/?service=rss,https://www.troyrecord.com/feed/,https://spectrumlocalnews.com/nys/capital-region.rss,https://wnyt.com/feed/,https://feeds.npr.org/1001/rss.xml,https://feeds.bbci.co.uk/news/rss.xml,https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml,https://www.theguardian.com/us/rss,https://www.cbsnews.com/latest/rss/main}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - OPENWEATHERMAP_API_KEY=${OPENWEATHERMAP_API_KEY}
       - ENABLE_FACT_CHECKING=${ENABLE_FACT_CHECKING:-true}

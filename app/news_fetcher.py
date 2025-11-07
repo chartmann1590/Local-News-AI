@@ -12,10 +12,12 @@ from dateutil import parser as dateparser
 from readability import Document
 
 from .database import SessionLocal
-from .models import Article
-from .geo import location_keywords
+from .models import Article, RejectedUrl, AppSettings
+from .geo import location_keywords, get_local_now
 from .progress import progress
+from .ai import analyze_article_quality
 import logging
+import os
 
 logger = logging.getLogger("app.fetcher")
 
@@ -319,8 +321,24 @@ def fetch_new_articles(min_count: int, location: str) -> List[Article]:
         existing_raw = [u for (u,) in session.query(Article.source_url).all()]
         existing_norm = { normalize_url(u) for u in existing_raw }
         existing_all = set(existing_raw) | existing_norm
-        new_items = [c for c in candidates if normalize_url(c["url"]) not in existing_all]
-        logger.info("new_items", extra={"count": len(new_items)})
+        
+        # Filter out rejected URLs
+        rejected_urls = {u for (u,) in session.query(RejectedUrl.url).all()}
+        rejected_norm = { normalize_url(u) for u in rejected_urls }
+        rejected_all = rejected_urls | rejected_norm
+        
+        new_items = [
+            c for c in candidates 
+            if normalize_url(c["url"]) not in existing_all 
+            and normalize_url(c["url"]) not in rejected_all
+        ]
+        logger.info("new_items", extra={"count": len(new_items), "rejected_skipped": len(rejected_all)})
+
+        # Load AI settings for quality analysis
+        aset = session.query(AppSettings).filter_by(id=1).one_or_none()
+        base_url = (aset.ollama_base_url if aset and aset.ollama_base_url else os.environ.get("OLLAMA_BASE_URL")) if aset else os.environ.get("OLLAMA_BASE_URL")
+        model = (aset.ollama_model if aset and aset.ollama_model else os.environ.get("OLLAMA_MODEL")) if aset else os.environ.get("OLLAMA_MODEL")
+        quality_threshold = (aset.quality_threshold if aset and aset.quality_threshold is not None else 60.0) if aset else 60.0
 
         for idx, item in enumerate(new_items, start=1):
             if len(created) >= min_count:
@@ -329,7 +347,50 @@ def fetch_new_articles(min_count: int, location: str) -> List[Article]:
             content, image_url = fetch_article_content(item["url"])
             if not content or len(content) < 120:
                 continue
-            from .geo import get_local_now
+            
+            # Analyze article quality
+            progress.phase('fetch', f'Analyzing quality {idx}/{len(new_items)}')
+            quality_result = analyze_article_quality(
+                content=content,
+                title=item.get("title"),
+                url=item["url"],
+                location=location,
+                base_url=base_url,
+                model=model,
+                timeout_s=600
+            )
+            
+            score = quality_result.get("score", 70.0)
+            is_garbage = quality_result.get("is_garbage", False)
+            reasons = quality_result.get("reasons", [])
+            
+            # Determine if article should be published based on threshold
+            should_publish = not is_garbage and score >= quality_threshold
+            
+            if not should_publish:
+                # Track rejected URL
+                normalized_url = normalize_url(item["url"])
+                rejection_reason = "; ".join(reasons) if reasons else quality_result.get("details", "Low quality score")
+                if len(rejection_reason) > 500:
+                    rejection_reason = rejection_reason[:497] + "..."
+                
+                # Check if already in rejected list (shouldn't happen, but be safe)
+                existing_rejected = session.query(RejectedUrl).filter_by(url=normalized_url).first()
+                if not existing_rejected:
+                    rejected = RejectedUrl(
+                        url=normalized_url,
+                        rejection_reason=rejection_reason,
+                        rejected_at=get_local_now()
+                    )
+                    session.add(rejected)
+                
+                logger.info("article_rejected", extra={
+                    "url": item["url"][:100],
+                    "score": score,
+                    "reasons": reasons
+                })
+            
+            # Create article (published or not)
             art = Article(
                 source_url=item["url"],
                 source_title=item.get("title"),
@@ -339,13 +400,19 @@ def fetch_new_articles(min_count: int, location: str) -> List[Article]:
                 raw_content=content,
                 image_url=image_url,
                 fetched_at=get_local_now(),
-                is_published=True,
+                is_published=should_publish,
             )
             session.add(art)
             session.commit()
             session.refresh(art)
-            created.append(art)
-        logger.info("created_articles", extra={"count": len(created)})
+            
+            if should_publish:
+                created.append(art)
+                logger.info("article_created", extra={"id": art.id, "score": score})
+            else:
+                logger.info("article_created_unpublished", extra={"id": art.id, "score": score})
+        
+        logger.info("created_articles", extra={"count": len(created), "total_processed": len(new_items)})
         return created
     finally:
         session.close()

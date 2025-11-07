@@ -66,10 +66,21 @@ def _rewrite_and_store(articles, *, base_url: str | None, model: str | None, fal
             # This handles cases where articles come from different sessions
             art = session.merge(art)
             
-            # Rewrite when missing AI, but NOT if it's a fallback or skipped article
-            # Fallback articles should be kept permanently, skipped articles can be retried later
+            # Rewrite when missing AI content OR when article is using fallback
+            # This allows automatic retry of articles that failed to rewrite previously
+            # To avoid infinite loops, only retry fallback articles that are at least 1 hour old
+            is_fallback = (art.ai_model or "").startswith("fallback:")
+            from datetime import timedelta
+            is_old_fallback = False
+            if is_fallback and art.ai_generated_at:
+                # Convert both to naive datetimes for comparison
+                now_naive = get_local_now().replace(tzinfo=None) if get_local_now().tzinfo else get_local_now()
+                ai_gen_naive = art.ai_generated_at.replace(tzinfo=None) if art.ai_generated_at.tzinfo else art.ai_generated_at
+                time_since_fallback = now_naive - ai_gen_naive
+                is_old_fallback = time_since_fallback > timedelta(hours=1)
+
             needs_rewrite = (art.raw_content is not None) and (
-                (not art.ai_body) and not ((art.ai_model or "").startswith("fallback:"))
+                (not art.ai_body) or is_old_fallback
             )
             if needs_rewrite:
                 # Update progress detail with current item
@@ -331,11 +342,16 @@ def run_harvest_once():
         model = (aset.ollama_model if aset.ollama_model else os.environ.get("OLLAMA_MODEL"))
         fallback_base_url = (aset.ollama_fallback_base_url if aset and aset.ollama_fallback_base_url else None)
         
-        # Query for existing articles that need rewriting (missing ai_body or using fallback model)
-        # This ensures failed rewrites get retried on every scheduled run
+        # Query for existing articles that need rewriting:
+        # 1. Articles with no ai_body (never rewritten)
+        # 2. OLD fallback articles (over 1 hour old) - these will be retried
+        from datetime import timedelta
+        one_hour_ago = get_local_now() - timedelta(hours=1)
+
         existing_needing_rewrite = session.query(Article).filter(
             Article.raw_content.isnot(None),
-            (Article.ai_body.is_(None) | Article.ai_model.like("fallback:%"))
+            (Article.ai_body.is_(None)) |
+            ((Article.ai_model.like("fallback:%")) & (Article.ai_generated_at < one_hour_ago))
         ).all()
         
         # Combine new articles with existing articles needing rewrites
@@ -359,6 +375,13 @@ def run_harvest_once():
         purge_duplicate_articles()
     except Exception:
         logger.exception("post_run_dedup_failed")
+    # Analyze existing articles periodically to remove garbage (sample a batch each run)
+    try:
+        from .maintenance import analyze_existing_articles
+        # Analyze up to 20 existing articles per harvest run to gradually clean up
+        analyze_existing_articles(limit=20)
+    except Exception:
+        logger.exception("post_run_quality_check_failed")
     # Update weather and generate report
     _gen_weather_report(location, base_url=base_url, model=model, temp_unit=temp_unit, wind_speed_unit=wind_speed_unit)
     

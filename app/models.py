@@ -28,6 +28,7 @@ class AppSettings(Base):
     ollama_fallback_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     temp_unit: Mapped[str | None] = mapped_column(String(1), nullable=True)  # 'F' or 'C'
     wind_speed_unit: Mapped[str | None] = mapped_column(String(10), nullable=True)  # 'mph' or 'kmh'
+    quality_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0-100, default 60
     updated_at: Mapped[DateTime | None] = mapped_column(DateTime, nullable=True)
 
 
@@ -120,3 +121,12 @@ class Broadcast(Base):
     duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     article_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     includes_weather: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class RejectedUrl(Base):
+    __tablename__ = "rejected_urls"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    url: Mapped[str] = mapped_column(String(1000), unique=True, index=True)
+    rejection_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    rejected_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: None, index=True)  # Set explicitly in creation code

@@ -33,6 +33,7 @@ Data volume:
 - Ollama model — the model name/tag served by Ollama.
 - Units — °F or °C; changing this triggers a fresh forecast fetch + AI weather report.
 - Location — manual set or auto-detect; either triggers a fresh weather refresh.
+- Quality Threshold — (0-100, default 60) Minimum quality score for articles to be published. Articles below this threshold or identified as garbage during AI quality analysis are rejected and not published.
 
 ### Text-to-Speech (TTS)
 

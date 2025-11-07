@@ -127,6 +127,10 @@ All endpoints are served by the FastAPI backend at the same host/port as the UI.
 - POST `/api/maintenance/rewrite-missing?limit=50`
   - Re-queues rewrites for articles with missing AI text or fallback AI.
   - Returns `{ status: "queued" }` (runs in background).
+- POST `/api/maintenance/analyze-existing?limit=50`
+  - Re-analyzes existing published articles using AI quality analysis and marks low-quality ones as unpublished.
+  - Uses the quality threshold from settings (default 60) to determine which articles to unpublish.
+  - Returns `{ status: "queued" }` (runs in background).
 
 ## Text-to-Speech (TTS)
 

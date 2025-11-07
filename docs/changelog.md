@@ -16,7 +16,8 @@
 - **HTTPS reverse proxy (nginx) on free port 18443 with self-signed cert** (2025-10-29)
 - **Flutter mobile app and comprehensive documentation** (2025-10-29)
 - **AI Fact-Checking for Rewrites:** Optional verification step to ensure rewritten articles preserve facts. Controlled via `ENABLE_FACT_CHECKING` (default `true`). (2025-11-06)
-- **API:** `GET /api/articles/sources`, `GET /api/articles/bookmarked`, `POST /api/articles/{id}/bookmark`, `GET /api/broadcasts`, `GET /api/broadcast/{id}/transcript`, `GET /api/broadcast/{id}/srt`. (2025-11-06)
+- **AI Quality Analysis:** Articles are now automatically analyzed for quality during fetching to filter out garbage content (lists, forms, navigation menus, etc.). Low-quality articles are rejected and their URLs are tracked to prevent re-fetching. (2025-11-06)
+- **API:** `GET /api/articles/sources`, `GET /api/articles/bookmarked`, `POST /api/articles/{id}/bookmark`, `GET /api/broadcasts`, `GET /api/broadcast/{id}/transcript`, `GET /api/broadcast/{id}/srt`, `POST /api/maintenance/analyze-existing`. (2025-11-06)
 
 ### Changed
 
@@ -37,6 +38,7 @@
 - **Sorting:** Articles are now sorted newest-first across the stack. (2025-10-30)
 - **Frontend:** Replaced Tailwind CDN with compiled Tailwind and fixed dark mode. (2025-10-29)
 - **Progress Controls:** `/api/progress/skip` and `/api/progress/fallback` accept optional `article_id` to target specific items if active. (2025-11-06)
+- **Article Quality Filtering:** New articles are automatically analyzed for quality during the fetch phase. Articles below the quality threshold (default 60) or identified as garbage are not published. (2025-11-06)
 
 ### Fixed
 

@@ -10,7 +10,7 @@ import requests
 
 
 DEFAULT_OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
-DEFAULT_OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
+DEFAULT_OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:latest")
 # Enable/disable AI fact-checking verification (default: enabled)
 ENABLE_FACT_CHECKING = os.environ.get("ENABLE_FACT_CHECKING", "true").lower() in ("true", "1", "yes")
 
@@ -157,9 +157,26 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
 
     text = content.strip()
 
+    # Validate content quality - reject if it looks like a list or form
+    lines = text.split('\n')
+    non_empty_lines = [l.strip() for l in lines if l.strip()]
+    if len(non_empty_lines) > 20:
+        # Check if most lines are very short (likely a list/menu)
+        short_lines = sum(1 for l in non_empty_lines if len(l) < 50)
+        if short_lines / len(non_empty_lines) > 0.7:  # More than 70% are short
+            import logging
+            logger = logging.getLogger("app.ai")
+            logger.warning(f"Content appears to be a list/form ({short_lines}/{len(non_empty_lines)} short lines), skipping")
+            return None
+
     system_prompt = (
         "You are a careful local news editor. Rewrite the article below for a local news site. "
-        "Preserve all facts, quotes, and numbers. Do not add new information. "
+        "CRITICAL: You MUST preserve ALL facts EXACTLY as stated in the original:\n"
+        "- Keep ALL names, dates, times, numbers, and locations EXACTLY as they appear\n"
+        "- Keep ALL quotes word-for-word if present\n"
+        "- Do NOT change ANY facts or add new information\n"
+        "- Do NOT infer or assume anything not explicitly stated\n"
+        "- Only improve clarity, structure, and brevity while keeping ALL facts identical\n"
         "Keep a neutral, concise, journalistic tone. Make it about 10-20% shorter but retain substance."
     )
     user_prompt = (
@@ -193,6 +210,8 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
         # Ollama chat returns {'message': {'content': '...json...'}}
         message = data.get("message", {})
         response_content = message.get("content", "")
+        logger.debug(f"Ollama response type: {type(response_content)}, length: {len(str(response_content)) if response_content else 0}")
+        logger.debug(f"Ollama response preview (first 200 chars): {str(response_content)[:200]}")
         rewrite_result = None
 
         if isinstance(response_content, dict):
@@ -239,6 +258,17 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
                     logger.debug(f"Response content (first 1000 chars): {content_clean[:1000]}")
                     raise  # Re-raise to trigger fallback
 
+        # Check if rewrite has valid content
+        if rewrite_result:
+            title_empty = not rewrite_result.get("title", "").strip()
+            body_empty = not rewrite_result.get("body", "").strip()
+            if title_empty or body_empty:
+                logger.warning(f"Ollama returned empty content - title_empty={title_empty}, body_empty={body_empty}")
+                logger.warning(f"This usually means the article content is garbage (forms, lists, etc.) or too complex for the model")
+                logger.debug(f"Article title: {source_title}")
+                logger.debug(f"Content length: {len(text)} chars, first 200: {text[:200]}")
+                raise ValueError("Empty rewrite content")
+
         # Perform fact-checking verification if enabled and rewrite was successful
         if rewrite_result and verify_facts:
             logger.info("Verifying factual accuracy of rewrite...")
@@ -253,7 +283,8 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
             logger.info(f"Fact-check: accurate={verification['accurate']}, confidence={verification['confidence']:.2f}")
 
             # If verification fails with high confidence, reject the rewrite
-            if not verification["accurate"] and verification["confidence"] > 0.7:
+            # Only reject if we're VERY confident (>85%) that there are errors
+            if not verification["accurate"] and verification["confidence"] > 0.85:
                 logger.warning(f"Fact-check FAILED: {verification['details']}")
                 if verification["issues"]:
                     logger.warning(f"Issues found: {', '.join(verification['issues'])}")
@@ -331,6 +362,12 @@ def rewrite_article(content: str, source_title: str | None, location: str, *, ba
                         if not fallback_result:
                             logger.warning(f"Fallback server JSON parse error: {json_err}")
                             raise  # Re-raise to continue error handling
+
+                # Check if fallback rewrite has valid content
+                if fallback_result:
+                    if not fallback_result.get("body", "").strip() or not fallback_result.get("title", "").strip():
+                        logger.warning("Fallback rewrite produced empty title or body, rejecting")
+                        raise ValueError("Empty fallback rewrite content")
 
                 # Perform fact-checking on fallback result if enabled
                 if fallback_result and verify_facts:
@@ -426,6 +463,150 @@ def ollama_list_models(base_url: Optional[str] = None) -> Optional[list[str]]:
         return models
     except Exception:
         return None
+
+
+def analyze_article_quality(
+    content: str,
+    title: str | None,
+    url: str | None,
+    location: str | None = None,
+    *,
+    base_url: Optional[str] = None,
+    model: Optional[str] = None,
+    timeout_s: int = 600,
+) -> Dict[str, Any]:
+    """
+    Analyze article quality using AI to identify garbage articles.
+    
+    Returns a dict with:
+    - score (float): Quality score 0-100
+    - is_garbage (bool): Whether article should be rejected
+    - reasons (list): List of rejection reasons if garbage
+    - details (str): Explanation of assessment
+    """
+    import logging
+    logger = logging.getLogger("app.ai")
+    
+    if not content or len(content.strip()) < 100:
+        return {
+            "score": 0.0,
+            "is_garbage": True,
+            "reasons": ["Content too short or empty"],
+            "details": "Article content is insufficient for quality assessment"
+        }
+    
+    text = content.strip()[:5000]  # Limit content length for analysis
+    title_text = (title or "").strip()[:500]
+    
+    system_prompt = (
+        "You are a news quality analyst. Evaluate articles for quality and relevance. "
+        "CRITICAL: Check if the content actually matches the title! Many garbage articles have good titles but terrible content.\n\n"
+        "Identify garbage articles including:\n"
+        "- Content that doesn't match or relate to the title\n"
+        "- Boilerplate content (lists of states, cookie policies, navigation menus, forms)\n"
+        "- Spam or promotional content\n"
+        "- Low-quality or poorly written content\n"
+        "- Off-topic or irrelevant to local news\n"
+        "- Clickbait with little substance\n"
+        "- Content that is clearly not actual news article text\n"
+        "- Content that's mostly HTML fragments, navigation, or UI elements\n\n"
+        "Score articles 0-100 where:\n"
+        "- 80-100: High quality, relevant news with content matching title\n"
+        "- 60-79: Acceptable quality\n"
+        "- 40-59: Low quality but potentially usable\n"
+        "- 0-39: Garbage - should be rejected\n\n"
+        "Be VERY strict about content matching the title. If the title says 'food pantry' but the content is just a list of states, score it 0-10."
+    )
+    
+    user_prompt = (
+        (f"Location: {location}\n" if location else "") +
+        (f"Title: {title_text}\n" if title_text else "") +
+        (f"URL: {url}\n" if url else "") +
+        "\nArticle Content:\n" + text + "\n\n" +
+        "Evaluate quality. FIRST check: Does the content actually relate to the title? "
+        "If the content is just lists, forms, navigation, or doesn't match the title at all, score 0-10.\n\n"
+        "Output strict JSON:\n"
+        "{\n"
+        '  "score": 0-100,\n'
+        '  "is_garbage": true/false,\n'
+        '  "reasons": ["list rejection reasons if garbage"],\n'
+        '  "details": "brief explanation including whether content matches title"\n'
+        "}"
+    )
+    
+    payload = {
+        "model": (model or DEFAULT_OLLAMA_MODEL),
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "stream": False,
+        "options": {"temperature": 0.1},  # Low temperature for consistent analysis
+        "format": "json",
+    }
+    
+    try:
+        data = _post_ollama("/api/chat", payload, base_url=base_url, timeout_s=timeout_s)
+        message = data.get("message", {})
+        response_content = message.get("content", "")
+        
+        # Parse JSON response
+        if isinstance(response_content, dict):
+            result = response_content
+        elif isinstance(response_content, str):
+            content_clean = response_content.strip()
+            if content_clean.startswith("```json"):
+                content_clean = content_clean[7:]
+            elif content_clean.startswith("```"):
+                content_clean = content_clean[3:]
+            if content_clean.endswith("```"):
+                content_clean = content_clean[:-3]
+            content_clean = content_clean.strip()
+            
+            try:
+                result = json.loads(content_clean)
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse quality analysis JSON response")
+                # Default to accepting if analysis fails
+                return {
+                    "score": 70.0,
+                    "is_garbage": False,
+                    "reasons": [],
+                    "details": "Quality analysis service unavailable, proceeding with article"
+                }
+        else:
+            return {
+                "score": 70.0,
+                "is_garbage": False,
+                "reasons": [],
+                "details": "Quality analysis service returned unexpected format"
+            }
+        
+        # Ensure required fields exist and validate score
+        score = float(result.get("score", 70.0))
+        score = max(0.0, min(100.0, score))  # Clamp to 0-100
+        
+        is_garbage = result.get("is_garbage", False)
+        # Also consider score-based rejection if score is very low
+        if score < 40:
+            is_garbage = True
+        
+        return {
+            "score": score,
+            "is_garbage": is_garbage,
+            "reasons": result.get("reasons", []),
+            "details": result.get("details", "")
+        }
+    
+    except Exception as e:
+        logger.warning(f"Quality analysis failed: {e}")
+        # If analysis fails, default to accepting the article
+        return {
+            "score": 70.0,
+            "is_garbage": False,
+            "reasons": [],
+            "details": f"Quality analysis error: {str(e)}"
+        }
 
 
 def generate_article_comment(

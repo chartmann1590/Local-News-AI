@@ -6,8 +6,12 @@ import re
 from urllib.parse import urlsplit
 
 from .database import SessionLocal
-from .models import Article, AppSettings
+from .models import Article, AppSettings, RejectedUrl
 from . import scheduler as scheduler_mod
+from .ai import analyze_article_quality
+from .news_fetcher import normalize_url
+from .geo import get_local_now
+import os
 
 logger = logging.getLogger("app.maintenance")
 
@@ -212,5 +216,106 @@ def rewrite_missing_articles(limit: int | None = None) -> dict:
             scheduler_mod._rewrite_and_store(to_fix, base_url=base_url, model=model, fallback_base_url=fallback_base_url)
         scheduler_mod.progress.finish()
         return {"rewritten": len(to_fix)}
+    finally:
+        session.close()
+
+
+def analyze_existing_articles(limit: int | None = None) -> dict:
+    """Re-analyze existing published articles and mark low-quality ones as unpublished.
+    
+    This function checks all published articles for quality and unpublishes
+    those that are identified as garbage, also tracking their URLs to prevent
+    re-fetching in the future.
+    """
+    session = SessionLocal()
+    try:
+        # Load AI settings
+        aset = session.query(AppSettings).filter_by(id=1).one_or_none()
+        base_url = (aset.ollama_base_url if aset and aset.ollama_base_url else os.environ.get("OLLAMA_BASE_URL")) if aset else os.environ.get("OLLAMA_BASE_URL")
+        model = (aset.ollama_model if aset and aset.ollama_model else os.environ.get("OLLAMA_MODEL")) if aset else os.environ.get("OLLAMA_MODEL")
+        quality_threshold = (aset.quality_threshold if aset and aset.quality_threshold is not None else 60.0) if aset else 60.0
+        
+        # Get published articles that have raw_content
+        query = session.query(Article).filter(
+            Article.is_published == True,
+            Article.raw_content.isnot(None)
+        ).order_by(Article.fetched_at.desc())
+        if limit:
+            query = query.limit(limit)
+        
+        articles = query.all()
+        logger.info("analyze_existing_start", extra={"count": len(articles)})
+        
+        analyzed = 0
+        unpublished = 0
+        
+        for art in articles:
+            try:
+                # Analyze quality
+                quality_result = analyze_article_quality(
+                    content=art.raw_content,
+                    title=art.source_title,
+                    url=art.source_url,
+                    location=art.location,
+                    base_url=base_url,
+                    model=model,
+                    timeout_s=600
+                )
+                
+                score = quality_result.get("score", 70.0)
+                is_garbage = quality_result.get("is_garbage", False)
+                reasons = quality_result.get("reasons", [])
+                
+                # Determine if article should remain published
+                should_publish = not is_garbage and score >= quality_threshold
+                
+                if not should_publish:
+                    # Unpublish the article
+                    art.is_published = False
+                    session.add(art)
+                    
+                    # Track rejected URL if not already tracked
+                    try:
+                        normalized_url = normalize_url(art.source_url)
+                        existing_rejected = session.query(RejectedUrl).filter_by(url=normalized_url).first()
+                        if not existing_rejected:
+                            rejection_reason = "; ".join(reasons) if reasons else quality_result.get("details", "Low quality score")
+                            if len(rejection_reason) > 500:
+                                rejection_reason = rejection_reason[:497] + "..."
+                            rejected = RejectedUrl(
+                                url=normalized_url,
+                                rejection_reason=rejection_reason,
+                                rejected_at=get_local_now()
+                            )
+                            session.add(rejected)
+                    except Exception as reject_err:
+                        # Log but don't fail if we can't add to rejected_urls (might already exist)
+                        logger.warning(f"Could not add rejected URL (already exists?): {reject_err}")
+                    
+                    unpublished += 1
+                    logger.info("article_unpublished", extra={
+                        "id": art.id,
+                        "url": art.source_url[:100],
+                        "score": score,
+                        "reasons": reasons
+                    })
+                
+                analyzed += 1
+                
+                # Commit periodically
+                if analyzed % 10 == 0:
+                    session.commit()
+                    logger.info("analyze_existing_progress", extra={"analyzed": analyzed, "unpublished": unpublished})
+            
+            except Exception as e:
+                logger.warning(f"Failed to analyze article {art.id}: {e}")
+                continue
+        
+        session.commit()
+        logger.info("analyze_existing_complete", extra={"analyzed": analyzed, "unpublished": unpublished})
+        return {"analyzed": analyzed, "unpublished": unpublished}
+    except Exception:
+        logger.exception("analyze_existing_failed")
+        return {"analyzed": 0, "unpublished": 0}
     finally:
         session.close()

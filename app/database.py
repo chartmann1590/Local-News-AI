@@ -71,6 +71,11 @@ def init_db():
             if "ollama_fallback_base_url" not in columns:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN ollama_fallback_base_url VARCHAR(500)"))
                 conn.commit()
+            # Migration: Add quality_threshold column if it doesn't exist
+            if "quality_threshold" not in columns:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN quality_threshold FLOAT"))
+                conn.commit()
+                logger.info("Added quality_threshold column to app_settings table")
             
             # Migration: Add srt_path column to broadcasts table if it doesn't exist
             result = conn.execute(text("PRAGMA table_info(broadcasts)"))
