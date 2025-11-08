@@ -1333,6 +1333,14 @@ def api_get_settings():
             "temp_unit": s.temp_unit if s.temp_unit else "F",
             "wind_speed_unit": s.wind_speed_unit if s.wind_speed_unit else "mph",
             "fact_checking_enabled": enable_fact_checking,
+            # Broadcast settings
+            "broadcast_bgm_enabled": bool(s.broadcast_bgm_enabled) if s and s.broadcast_bgm_enabled is not None else False,
+            "broadcast_bgm_path": s.broadcast_bgm_path if s and s.broadcast_bgm_path else None,
+            "broadcast_bgm_volume": s.broadcast_bgm_volume if s and s.broadcast_bgm_volume is not None else 0.12,
+            "broadcast_audio_fade": s.broadcast_audio_fade if s and s.broadcast_audio_fade is not None else 0.5,
+            "broadcast_transition_duration": s.broadcast_transition_duration if s and s.broadcast_transition_duration is not None else 0.5,
+            "broadcast_ken_burns_enabled": bool(s.broadcast_ken_burns_enabled) if s and s.broadcast_ken_burns_enabled is not None else True,
+            "broadcast_ken_burns_zoom": s.broadcast_ken_burns_zoom if s and s.broadcast_ken_burns_zoom is not None else 0.03,
         }
     finally:
         session.close()
@@ -1363,11 +1371,107 @@ def api_set_settings(payload: dict):
                 wind_unit_changed = (new_wind_unit != s.wind_speed_unit)
                 changed_unit = changed_unit or wind_unit_changed
                 s.wind_speed_unit = new_wind_unit
+        # Broadcast settings (optional)
+        def _float(val, default=None, lo=None, hi=None):
+            try:
+                x = float(val)
+                if lo is not None:
+                    x = max(lo, x)
+                if hi is not None:
+                    x = min(hi, x)
+                return x
+            except Exception:
+                return default
+        if "broadcast_bgm_enabled" in payload:
+            s.broadcast_bgm_enabled = bool(payload.get("broadcast_bgm_enabled"))
+        if "broadcast_bgm_path" in payload:
+            pth = payload.get("broadcast_bgm_path") or None
+            s.broadcast_bgm_path = pth
+        if "broadcast_bgm_volume" in payload:
+            s.broadcast_bgm_volume = _float(payload.get("broadcast_bgm_volume"), default=0.12, lo=0.0, hi=1.0)
+        if "broadcast_audio_fade" in payload:
+            s.broadcast_audio_fade = _float(payload.get("broadcast_audio_fade"), default=0.5, lo=0.0, hi=5.0)
+        if "broadcast_transition_duration" in payload:
+            s.broadcast_transition_duration = _float(payload.get("broadcast_transition_duration"), default=0.5, lo=0.0, hi=3.0)
+        if "broadcast_ken_burns_enabled" in payload:
+            s.broadcast_ken_burns_enabled = bool(payload.get("broadcast_ken_burns_enabled"))
+        if "broadcast_ken_burns_zoom" in payload:
+            s.broadcast_ken_burns_zoom = _float(payload.get("broadcast_ken_burns_zoom"), default=0.03, lo=0.0, hi=0.2)
+
         s.updated_at = get_local_now()
         session.merge(s)
         session.commit()
     finally:
         session.close()
+
+
+@app.post("/api/broadcast/bgm")
+async def api_upload_bgm(file: UploadFile = File(...)):
+    # Accept MP3 or WAV and write under /data/broadcasts
+    try:
+        content_type = (file.content_type or "").lower()
+        ext = ".mp3" if "mp3" in content_type else (".wav" if "wav" in content_type else None)
+        if not ext:
+            # Try from filename
+            name = file.filename or ""
+            name_lower = name.lower()
+            if name_lower.endswith(".mp3"):
+                ext = ".mp3"
+            elif name_lower.endswith(".wav"):
+                ext = ".wav"
+        if not ext:
+            return JSONResponse(status_code=400, content={"error": "unsupported audio type. upload .mp3 or .wav"})
+
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "broadcasts"))
+        os.makedirs(base_dir, exist_ok=True)
+        out_path = os.path.join(base_dir, f"bgm{ext}")
+
+        # Remove any existing BGM files to ensure a single active file
+        try:
+            for old in (os.path.join(base_dir, "bgm.mp3"), os.path.join(base_dir, "bgm.wav")):
+                if os.path.exists(old) and old != out_path:
+                    try:
+                        os.remove(old)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Save with size limit (20 MB)
+        max_bytes = 20 * 1024 * 1024
+        total = 0
+        with open(out_path, 'wb') as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    try:
+                        out.close()
+                        os.remove(out_path)
+                    except Exception:
+                        pass
+                    return JSONResponse(status_code=400, content={"error": "file too large (max 20MB)"})
+                out.write(chunk)
+
+        # Update settings to use uploaded BGM
+        session = SessionLocal()
+        try:
+            s = session.query(AppSettings).filter_by(id=1).one_or_none()
+            if not s:
+                s = AppSettings(id=1)
+                session.add(s)
+            s.broadcast_bgm_path = out_path
+            s.broadcast_bgm_enabled = True
+            session.merge(s)
+            session.commit()
+        finally:
+            session.close()
+
+        return {"ok": True, "path": out_path, "bytes": total}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
     if changed_unit:
         def _bg_refresh_unit():
             try:

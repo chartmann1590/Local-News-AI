@@ -31,6 +31,15 @@ class AppSettings(Base):
     quality_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0-100, default 60
     updated_at: Mapped[DateTime | None] = mapped_column(DateTime, nullable=True)
 
+    # Broadcast settings
+    broadcast_bgm_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    broadcast_bgm_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    broadcast_bgm_volume: Mapped[float | None] = mapped_column(Float, nullable=True)
+    broadcast_audio_fade: Mapped[float | None] = mapped_column(Float, nullable=True)
+    broadcast_transition_duration: Mapped[float | None] = mapped_column(Float, nullable=True)
+    broadcast_ken_burns_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    broadcast_ken_burns_zoom: Mapped[float | None] = mapped_column(Float, nullable=True)
+
 
 class TTSSettings(Base):
     __tablename__ = "tts_settings"

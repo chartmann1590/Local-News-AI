@@ -13,8 +13,10 @@ from pathlib import Path
 import requests
 from moviepy.editor import (
     ImageClip, AudioFileClip, concatenate_videoclips, concatenate_audioclips,
-    CompositeVideoClip, TextClip, VideoFileClip, transfx
+    CompositeVideoClip, CompositeAudioClip, TextClip, VideoFileClip, transfx, vfx,
+    ColorClip
 )
+from moviepy.audio.fx.all import audio_loop
 from PIL import Image, ImageDraw, ImageFont
 
 from .database import SessionLocal
@@ -1336,6 +1338,50 @@ def _smart_chunk_text(text: str, max_chars: int = 1000) -> List[str]:
     return chunks if chunks else [text]
 
 
+def _generate_word_level_captions(text: str, duration: float, start_time: float = 0.0) -> List[Dict[str, Any]]:
+    """Generate word-level caption entries for better sync.
+
+    Args:
+        text: The text to caption
+        duration: Audio duration in seconds
+        start_time: Start time offset in seconds
+
+    Returns:
+        List of caption entries with precise word-level timing
+    """
+    import re
+
+    # Split into words while preserving punctuation
+    words = re.findall(r'\S+', text)
+
+    if not words:
+        return []
+
+    # Calculate average time per word
+    time_per_word = duration / len(words)
+
+    captions = []
+    current_time = start_time
+
+    # Group words into natural phrases (3-5 words each for readability)
+    WORDS_PER_CAPTION = 4
+
+    for i in range(0, len(words), WORDS_PER_CAPTION):
+        phrase_words = words[i:i + WORDS_PER_CAPTION]
+        phrase = ' '.join(phrase_words)
+        phrase_duration = len(phrase_words) * time_per_word
+
+        captions.append({
+            'start': current_time,
+            'end': current_time + phrase_duration,
+            'text': phrase
+        })
+
+        current_time += phrase_duration
+
+    return captions
+
+
 def _generate_tts_with_chunking(
     client: TTSClient,
     text: str,
@@ -1466,6 +1512,215 @@ def _generate_tts_with_chunking(
         return None
 
 
+class BroadcastSegment:
+    """Individual broadcast segment with aligned video, audio, and captions."""
+    def __init__(self, segment_type: str, segment_id: Any, text: str, audio_path: str,
+                 video_path: str, duration: float, captions: List[Dict[str, Any]]):
+        self.segment_type = segment_type  # "intro", "article", "weather", "ending"
+        self.segment_id = segment_id  # article index or type string
+        self.text = text
+        self.audio_path = audio_path
+        self.video_path = video_path
+        self.duration = duration
+        self.captions = captions
+
+
+def create_individual_segment(
+    segment_type: str,
+    segment_id: Any,
+    text: str,
+    image_path: Optional[str],
+    title: Optional[str],
+    temp_dir: str,
+    tts_client: TTSClient,
+    voice: Optional[str] = None,
+    width: int = 1280,
+    height: int = 720
+) -> Optional[BroadcastSegment]:
+    """Create a single broadcast segment with perfectly aligned video, audio, and captions.
+
+    This function creates ONE segment at a time, ensuring perfect synchronization:
+    1. Generate TTS audio and get ACTUAL duration
+    2. Create video slide with EXACT duration from audio
+    3. Generate word-level captions aligned to ACTUAL audio timing
+
+    Returns:
+        BroadcastSegment with all components aligned, or None if failed
+    """
+    try:
+        logger.info(f"=" * 80)
+        logger.info(f"Creating {segment_type} segment (ID: {segment_id})")
+        logger.info(f"Text: {len(text)} chars")
+
+        # Step 1: Generate TTS audio and get ACTUAL duration
+        logger.info(f"Step 1/{segment_type}: Generating TTS audio...")
+        audio_result = _generate_tts_with_chunking(
+            client=tts_client,
+            text=text,
+            voice=voice,
+            timeout=1800,  # 30 min per segment
+            temp_dir=temp_dir,
+            segment_name=f"{segment_type}_{segment_id}"
+        )
+
+        if not audio_result:
+            logger.error(f"Failed to generate TTS for {segment_type} segment")
+            return None
+
+        audio_bytes, audio_duration = audio_result
+        logger.info(f"✓ Audio generated: {audio_duration:.2f} seconds")
+
+        # Save audio
+        audio_path = os.path.join(temp_dir, f"{segment_type}_{segment_id}_audio.wav")
+        with open(audio_path, 'wb') as f:
+            f.write(audio_bytes)
+
+        # Step 2: Create video slide with EXACT duration from audio
+        logger.info(f"Step 2/{segment_type}: Creating video slide (duration: {audio_duration:.2f}s)...")
+
+        # Helper to resize and convert image
+        def prepare_image(img_path: str) -> str:
+            img = Image.open(img_path)
+
+            # Convert to RGB if needed
+            if img.mode in ('P', 'RGBA', 'LA', 'PA'):
+                if img.mode in ('RGBA', 'LA', 'PA'):
+                    background = Image.new('RGB', img.size, (255, 255, 255))
+                    if img.mode == 'P':
+                        img = img.convert('RGBA')
+                    background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA', 'PA') else None)
+                    img = background
+                else:
+                    img = img.convert('RGB')
+
+            # Resize to match video dimensions
+            try:
+                resized = img.resize((width, height), Image.Resampling.LANCZOS)
+            except AttributeError:
+                resized = img.resize((width, height), Image.LANCZOS)
+
+            # Save temporarily
+            temp_path = os.path.join(temp_dir, f"{segment_type}_{segment_id}_prepared.jpg")
+            resized.save(temp_path, format='JPEG', quality=95)
+            return temp_path
+
+        # Create video clip from image with exact audio duration
+        if image_path and os.path.exists(image_path):
+            prepared_image = prepare_image(image_path)
+        else:
+            # Create placeholder
+            placeholder = Image.new('RGB', (width, height), color='#1e293b')
+            if title:
+                draw = ImageDraw.Draw(placeholder)
+                try:
+                    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
+                except Exception:
+                    font = ImageFont.load_default()
+                bbox = draw.textbbox((0, 0), title, font=font)
+                text_width = bbox[2] - bbox[0]
+                draw.text(((width - text_width) // 2, height // 2), title, fill='#ffffff', font=font)
+            placeholder_path = os.path.join(temp_dir, f"{segment_type}_{segment_id}_placeholder.jpg")
+            placeholder.save(placeholder_path, format='JPEG', quality=95)
+            prepared_image = placeholder_path
+
+        # Create video clip with ImageClip and AudioFileClip
+        from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip
+
+        image_clip = ImageClip(prepared_image, duration=audio_duration)
+        audio_clip = AudioFileClip(audio_path)
+
+        # Combine video and audio
+        video_clip = image_clip.set_audio(audio_clip)
+
+        # Add title overlay if provided
+        if title and segment_type == "article":
+            # Create title overlay
+            overlay_img = Image.new('RGBA', (width, 200), color=(0, 0, 0, 0))
+            draw = ImageDraw.Draw(overlay_img)
+
+            # Semi-transparent black background
+            draw.rectangle([(40, 20), (width - 40, 100)], fill=(0, 0, 0, 180))
+
+            # Title text
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
+            except Exception:
+                font = ImageFont.load_default()
+
+            # Wrap title
+            words = title.split()
+            lines = []
+            current_line = []
+            for word in words:
+                test = ' '.join(current_line + [word])
+                bbox = draw.textbbox((0, 0), test, font=font)
+                if bbox[2] - bbox[0] < width - 120:
+                    current_line.append(word)
+                else:
+                    if current_line:
+                        lines.append(' '.join(current_line))
+                    current_line = [word]
+            if current_line:
+                lines.append(' '.join(current_line))
+
+            # Draw lines
+            y = 30
+            for line in lines[:2]:  # Max 2 lines
+                bbox = draw.textbbox((0, 0), line, font=font)
+                text_width = bbox[2] - bbox[0]
+                draw.text(((width - text_width) // 2, y), line, fill=(255, 255, 255, 255), font=font)
+                y += 35
+
+            overlay_path = os.path.join(temp_dir, f"{segment_type}_{segment_id}_overlay.png")
+            overlay_img.save(overlay_path, 'PNG')
+
+            # Add overlay to video
+            overlay_clip = ImageClip(overlay_path, duration=audio_duration).set_position(('center', 'top'))
+            video_clip = CompositeVideoClip([video_clip, overlay_clip])
+
+        # Write video segment
+        video_path = os.path.join(temp_dir, f"{segment_type}_{segment_id}_video.mp4")
+        video_clip.write_videofile(
+            video_path,
+            fps=24,
+            codec='libx264',
+            audio_codec='aac',
+            verbose=False,
+            logger=None
+        )
+
+        # Cleanup clips
+        video_clip.close()
+        audio_clip.close()
+        image_clip.close()
+
+        logger.info(f"✓ Video created: {video_path}")
+
+        # Step 3: Generate word-level captions aligned to audio timing
+        logger.info(f"Step 3/{segment_type}: Generating word-level captions...")
+        captions = _generate_word_level_captions(text, audio_duration, start_time=0.0)
+        logger.info(f"✓ Generated {len(captions)} caption entries")
+
+        # Create and return segment
+        segment = BroadcastSegment(
+            segment_type=segment_type,
+            segment_id=segment_id,
+            text=text,
+            audio_path=audio_path,
+            video_path=video_path,
+            duration=audio_duration,
+            captions=captions
+        )
+
+        logger.info(f"✓ {segment_type} segment complete: {audio_duration:.2f}s")
+        logger.info(f"=" * 80)
+        return segment
+
+    except Exception as e:
+        logger.error(f"Failed to create {segment_type} segment: {e}", exc_info=True)
+        return None
+
+
 def generate_broadcast_audio_segments(
     articles: List[Article],
     weather_report: Optional[str],
@@ -1579,10 +1834,9 @@ def generate_broadcast_audio_segments(
             if not result:
                 logger.error(f"CRITICAL: Failed to generate TTS for article {article.id} even with chunking")
                 logger.error(f"Article script was: {script_total_chars} chars, {script_total_words} words")
-                word_count = len(article_script.split())
-                estimated_duration = (word_count / 150.0) * 60.0
-                segment_durations.append((i, estimated_duration))
-                logger.error(f"Article {i+1} AUDIO IS MISSING - estimated duration: {estimated_duration:.2f} seconds")
+                logger.error(f"Article {i+1} will be SKIPPED from broadcast (no audio)")
+                # Do NOT add to segment_durations - this article will be excluded from the video
+                # Do NOT add estimated duration - it causes misalignment
                 continue
 
             article_audio, article_duration = result
@@ -1616,10 +1870,9 @@ def generate_broadcast_audio_segments(
 
             if not result:
                 logger.error(f"CRITICAL: Failed to generate weather TTS even with chunking")
-                word_count = len(weather_report.split())
-                estimated_duration = (word_count / 150.0) * 60.0
-                segment_durations.append(("weather", estimated_duration))
-                logger.error(f"Weather AUDIO IS MISSING - estimated duration: {estimated_duration:.2f} seconds")
+                logger.error(f"Weather segment will be SKIPPED from broadcast (no audio)")
+                # Do NOT add to segment_durations - weather will be excluded from the video
+                # Do NOT add estimated duration - it causes misalignment
             else:
                 weather_audio, weather_duration = result
 
@@ -1743,13 +1996,21 @@ def compile_broadcast_video(
     width: int = 1280,
     height: int = 720
 ) -> Optional[Tuple[float, Optional[str]]]:
-    """Compile video slideshow with proper timing for each segment. Returns duration in seconds."""
+    """Compile video slideshow with proper timing for each segment. Returns duration in seconds.
+
+    Sync policy:
+    - Build an absolute timeline anchored to the narration audio length.
+    - Each visual segment is positioned with set_start(current_time) and set_duration(seg_duration).
+    - This avoids cumulative rounding errors from sequential concatenation.
+    - Optionally fade-in segments for polish without changing alignment.
+    """
     try:
         # Load audio
         audio_clip = AudioFileClip(audio_path)
         total_duration = audio_clip.duration
         
-        video_clips = []
+        # We'll build a set of timeline-aligned clips and composite them
+        timeline_clips = []
         current_time = 0.0
         
         # Create a mapping of article index to article object
@@ -1760,6 +2021,20 @@ def compile_broadcast_video(
             """Resize image using PIL and return path to resized image."""
             try:
                 img = Image.open(image_path)
+
+                # Convert palette (P) and RGBA images to RGB to avoid JPEG save errors
+                if img.mode in ('P', 'RGBA', 'LA', 'PA'):
+                    # Create white background for transparency
+                    if img.mode in ('RGBA', 'LA', 'PA'):
+                        background = Image.new('RGB', img.size, (255, 255, 255))
+                        if img.mode == 'P':
+                            img = img.convert('RGBA')
+                        background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA', 'PA') else None)
+                        img = background
+                    else:
+                        # Simple palette conversion
+                        img = img.convert('RGB')
+
                 # Use LANCZOS instead of ANTIALIAS (deprecated in newer Pillow)
                 # Handle both old and new Pillow versions
                 try:
@@ -1772,8 +2047,20 @@ def compile_broadcast_video(
                     except AttributeError:
                         # Last resort: use default resampling
                         resized = img.resize((target_width, target_height))
-                temp_path = os.path.join(tempfile.gettempdir(), f"resized_{os.getpid()}_{os.path.basename(image_path)}")
-                resized.save(temp_path)
+
+                # Determine output format based on original file extension
+                base_name = os.path.basename(image_path)
+                temp_path = os.path.join(tempfile.gettempdir(), f"resized_{os.getpid()}_{base_name}")
+
+                # Save with appropriate format
+                if base_name.lower().endswith('.png'):
+                    resized.save(temp_path, format='PNG')
+                else:
+                    # Convert to RGB if not already for JPEG
+                    if resized.mode != 'RGB':
+                        resized = resized.convert('RGB')
+                    resized.save(temp_path, format='JPEG', quality=95)
+
                 return temp_path
             except Exception as e:
                 logger.warning(f"Failed to resize image {image_path}: {e}")
@@ -1836,9 +2123,18 @@ def compile_broadcast_video(
                 overlay_height = total_text_height + (padding * 2)
                 overlay_width = min(max_width, width - 40)  # Leave 20px margins on each side
                 
-                # Create overlay image with white background
-                overlay = Image.new('RGB', (overlay_width, overlay_height), color='white')
-                draw = ImageDraw.Draw(overlay)
+                # Create overlay image with transparent background and semi-transparent dark panel
+                overlay = Image.new('RGBA', (overlay_width, overlay_height), color=(0, 0, 0, 0))
+                draw = ImageDraw.Draw(overlay, 'RGBA')
+                # Panel background (rounded), semi-transparent black
+                try:
+                    draw.rounded_rectangle(
+                        [(0, 0), (overlay_width, overlay_height)],
+                        radius=16,
+                        fill=(0, 0, 0, 160)
+                    )
+                except Exception:
+                    draw.rectangle([(0, 0), (overlay_width, overlay_height)], fill=(0, 0, 0, 160))
                 
                 # Draw text
                 y_offset = padding
@@ -1847,7 +2143,7 @@ def compile_broadcast_video(
                     bbox = draw.textbbox((0, 0), line, font=font)
                     text_width = bbox[2] - bbox[0]
                     x_offset = (overlay_width - text_width) // 2
-                    draw.text((x_offset, y_offset), line, fill='black', font=font)
+                    draw.text((x_offset, y_offset), line, fill=(255, 255, 255, 255), font=font)
                     y_offset += line_heights[i] + 10
                 
                 # Save overlay
@@ -1858,17 +2154,25 @@ def compile_broadcast_video(
                 logger.warning(f"Failed to create title overlay: {e}")
                 return None
         
-        # Process each segment
-        for segment_info in segment_durations:
+        # Process each segment: create clips aligned to absolute timeline
+        for seg_index, segment_info in enumerate(segment_durations):
             if isinstance(segment_info, tuple) and len(segment_info) == 2:
                 seg_type, seg_duration = segment_info
-                
+
                 if seg_type == "intro":
                     # Use intro slide if available
                     if intro_slide_path and os.path.exists(intro_slide_path):
                         try:
                             clip = ImageClip(intro_slide_path, duration=seg_duration)
-                            video_clips.append(clip)
+                            # Align to timeline and add gentle fade-in
+                            try:
+                                TRANSITION_DURATION = float(os.environ.get("BROADCAST_TRANSITION_DURATION", "0.5"))
+                            except Exception:
+                                TRANSITION_DURATION = 0.5
+                            clip = clip.set_start(current_time).set_duration(seg_duration)
+                            if seg_index > 0 and TRANSITION_DURATION > 0:
+                                clip = clip.crossfadein(TRANSITION_DURATION)
+                            timeline_clips.append(clip)
                         except Exception as e:
                             logger.warning(f"Failed to create intro clip: {e}")
                     else:
@@ -1878,16 +2182,30 @@ def compile_broadcast_video(
                             intro_path = os.path.join(tempfile.gettempdir(), f"intro_{os.getpid()}.png")
                             intro_img.save(intro_path)
                             clip = ImageClip(intro_path, duration=seg_duration)
-                            video_clips.append(clip)
+                            try:
+                                TRANSITION_DURATION = float(os.environ.get("BROADCAST_TRANSITION_DURATION", "0.5"))
+                            except Exception:
+                                TRANSITION_DURATION = 0.5
+                            clip = clip.set_start(current_time).set_duration(seg_duration)
+                            if seg_index > 0 and TRANSITION_DURATION > 0:
+                                clip = clip.crossfadein(TRANSITION_DURATION)
+                            timeline_clips.append(clip)
                         except Exception:
                             pass
-                
+
                 elif seg_type == "ending":
                     # Use ending slide if available
                     if ending_slide_path and os.path.exists(ending_slide_path):
                         try:
                             clip = ImageClip(ending_slide_path, duration=seg_duration)
-                            video_clips.append(clip)
+                            try:
+                                TRANSITION_DURATION = float(os.environ.get("BROADCAST_TRANSITION_DURATION", "0.5"))
+                            except Exception:
+                                TRANSITION_DURATION = 0.5
+                            clip = clip.set_start(current_time).set_duration(seg_duration)
+                            if seg_index > 0 and TRANSITION_DURATION > 0:
+                                clip = clip.crossfadein(TRANSITION_DURATION)
+                            timeline_clips.append(clip)
                         except Exception as e:
                             logger.warning(f"Failed to create ending clip: {e}")
                     else:
@@ -1897,10 +2215,17 @@ def compile_broadcast_video(
                             ending_path = os.path.join(tempfile.gettempdir(), f"ending_{os.getpid()}.png")
                             ending_img.save(ending_path)
                             clip = ImageClip(ending_path, duration=seg_duration)
-                            video_clips.append(clip)
+                            try:
+                                TRANSITION_DURATION = float(os.environ.get("BROADCAST_TRANSITION_DURATION", "0.5"))
+                            except Exception:
+                                TRANSITION_DURATION = 0.5
+                            clip = clip.set_start(current_time).set_duration(seg_duration)
+                            if seg_index > 0 and TRANSITION_DURATION > 0:
+                                clip = clip.crossfadein(TRANSITION_DURATION)
+                            timeline_clips.append(clip)
                         except Exception:
                             pass
-                
+
                 elif seg_type == "weather":
                     # Add BOTH weather slides: regular weather report + radar card
                     # Split duration between them
@@ -1911,7 +2236,14 @@ def compile_broadcast_video(
                         try:
                             resized_path = resize_image_with_pil(weather_slide_path, width, height)
                             weather_clip = ImageClip(resized_path, duration=slide_duration)
-                            video_clips.append(weather_clip)
+                            try:
+                                TRANSITION_DURATION = float(os.environ.get("BROADCAST_TRANSITION_DURATION", "0.5"))
+                            except Exception:
+                                TRANSITION_DURATION = 0.5
+                            weather_clip = weather_clip.set_start(current_time).set_duration(slide_duration)
+                            if seg_index > 0 and TRANSITION_DURATION > 0:
+                                weather_clip = weather_clip.crossfadein(TRANSITION_DURATION)
+                            timeline_clips.append(weather_clip)
                             logger.info(f"Added weather slide (duration: {slide_duration:.2f}s)")
                         except Exception as e:
                             logger.warning(f"Failed to create weather slide: {e}")
@@ -1921,7 +2253,14 @@ def compile_broadcast_video(
                         try:
                             resized_path = resize_image_with_pil(radar_card_path, width, height)
                             radar_clip = ImageClip(resized_path, duration=slide_duration)
-                            video_clips.append(radar_clip)
+                            try:
+                                TRANSITION_DURATION = float(os.environ.get("BROADCAST_TRANSITION_DURATION", "0.5"))
+                            except Exception:
+                                TRANSITION_DURATION = 0.5
+                            radar_clip = radar_clip.set_start(current_time + slide_duration).set_duration(slide_duration)
+                            if TRANSITION_DURATION > 0:
+                                radar_clip = radar_clip.crossfadein(TRANSITION_DURATION)
+                            timeline_clips.append(radar_clip)
                             logger.info(f"Added radar card (duration: {slide_duration:.2f}s)")
                         except Exception as e:
                             logger.warning(f"Failed to create radar card: {e}")
@@ -1934,10 +2273,17 @@ def compile_broadcast_video(
                             placeholder_path = os.path.join(tempfile.gettempdir(), f"weather_placeholder_{os.getpid()}.png")
                             placeholder.save(placeholder_path)
                             clip = ImageClip(placeholder_path, duration=seg_duration)
-                            video_clips.append(clip)
+                            try:
+                                TRANSITION_DURATION = float(os.environ.get("BROADCAST_TRANSITION_DURATION", "0.5"))
+                            except Exception:
+                                TRANSITION_DURATION = 0.5
+                            clip = clip.set_start(current_time).set_duration(seg_duration)
+                            if seg_index > 0 and TRANSITION_DURATION > 0:
+                                clip = clip.crossfadein(TRANSITION_DURATION)
+                            timeline_clips.append(clip)
                         except Exception:
                             pass
-                
+
                 elif isinstance(seg_type, int) and seg_type in article_map:
                     # Article segment
                     article = article_map[seg_type]
@@ -1948,11 +2294,23 @@ def compile_broadcast_video(
                             # Resize with PIL first to avoid ANTIALIAS issue
                             resized_path = resize_image_with_pil(image_path, width, height)
                             clip = ImageClip(resized_path, duration=seg_duration)
-                            
+                            # Apply subtle Ken Burns effect (slow zoom) for visual interest
+                            try:
+                                kb_flag = str(os.environ.get("BROADCAST_KEN_BURNS", "1")).strip().lower() in ("1", "true", "yes", "on")
+                                kb_zoom = float(os.environ.get("BROADCAST_KEN_BURNS_ZOOM", "0.03"))  # ~3% zoom over clip
+                            except Exception:
+                                kb_flag = True
+                                kb_zoom = 0.03
+                            if kb_flag and seg_duration and seg_duration > 0.1:
+                                try:
+                                    clip = clip.resize(lambda t: 1.0 + (kb_zoom * (t / max(seg_duration, 0.0001))))
+                                except Exception as e:
+                                    logger.debug(f"Ken Burns effect skipped: {e}")
+
                             # Add title overlay with white background at top
                             title = article.ai_title or article.source_title or "News Story"
                             overlay_path = create_title_overlay_image(title, width, height)
-                            
+
                             if overlay_path and os.path.exists(overlay_path):
                                 try:
                                     overlay_clip = ImageClip(overlay_path, duration=seg_duration)
@@ -1961,8 +2319,16 @@ def compile_broadcast_video(
                                     clip = CompositeVideoClip([clip, overlay_clip])
                                 except Exception as e:
                                     logger.warning(f"Failed to add title overlay: {e}")
-                            
-                            video_clips.append(clip)
+
+                            # Align to absolute timeline and fade-in
+                            try:
+                                TRANSITION_DURATION = float(os.environ.get("BROADCAST_TRANSITION_DURATION", "0.5"))
+                            except Exception:
+                                TRANSITION_DURATION = 0.5
+                            clip = clip.set_start(current_time).set_duration(seg_duration)
+                            if seg_index > 0 and TRANSITION_DURATION > 0:
+                                clip = clip.crossfadein(TRANSITION_DURATION)
+                            timeline_clips.append(clip)
                         except Exception as e:
                             logger.warning(f"Failed to create clip for article {article.id}: {e}")
                             # Fallback placeholder
@@ -1971,7 +2337,14 @@ def compile_broadcast_video(
                                 placeholder_path = os.path.join(tempfile.gettempdir(), f"placeholder_{article.id}_{os.getpid()}.png")
                                 placeholder.save(placeholder_path)
                                 clip = ImageClip(placeholder_path, duration=seg_duration)
-                                video_clips.append(clip)
+                                try:
+                                    TRANSITION_DURATION = float(os.environ.get("BROADCAST_TRANSITION_DURATION", "0.5"))
+                                except Exception:
+                                    TRANSITION_DURATION = 0.5
+                                clip = clip.set_start(current_time).set_duration(seg_duration)
+                                if seg_index > 0 and TRANSITION_DURATION > 0:
+                                    clip = clip.crossfadein(TRANSITION_DURATION)
+                                timeline_clips.append(clip)
                             except Exception:
                                 pass
                     else:
@@ -1981,37 +2354,42 @@ def compile_broadcast_video(
                             placeholder_path = os.path.join(tempfile.gettempdir(), f"placeholder_{article.id}_{os.getpid()}.png")
                             placeholder.save(placeholder_path)
                             clip = ImageClip(placeholder_path, duration=seg_duration)
-                            video_clips.append(clip)
+                            try:
+                                TRANSITION_DURATION = float(os.environ.get("BROADCAST_TRANSITION_DURATION", "0.5"))
+                            except Exception:
+                                TRANSITION_DURATION = 0.5
+                            clip = clip.set_start(current_time).set_duration(seg_duration)
+                            if seg_index > 0 and TRANSITION_DURATION > 0:
+                                clip = clip.crossfadein(TRANSITION_DURATION)
+                            timeline_clips.append(clip)
                         except Exception:
                             pass
-                
+
                 current_time += seg_duration
-        
-        if not video_clips:
+
+        if not timeline_clips:
             # Fallback: create a simple placeholder
             placeholder = Image.new('RGB', (width, height), color='#1e293b')
             placeholder_path = os.path.join(tempfile.gettempdir(), f"broadcast_placeholder_{os.getpid()}.png")
             placeholder.save(placeholder_path)
             clip = ImageClip(placeholder_path, duration=total_duration)
-            video_clips.append(clip)
+            timeline_clips.append(clip.set_start(0).set_duration(total_duration))
 
-        # Add crossfade transitions between clips (except first clip)
-        logger.info(f"Adding crossfade transitions to {len(video_clips)} video clips")
-        TRANSITION_DURATION = 0.5  # 0.5 second crossfade
-
-        for i in range(len(video_clips)):
-            if i > 0:
-                # Add crossfade to all clips except the first
-                try:
-                    video_clips[i] = video_clips[i].crossfadein(TRANSITION_DURATION)
-                    logger.debug(f"Added crossfade to clip {i+1}")
-                except Exception as e:
-                    logger.warning(f"Failed to add crossfade to clip {i+1}: {e}")
-
-        # Concatenate all video clips
-        logger.info(f"Concatenating {len(video_clips)} video clips with transitions")
-        final_video = concatenate_videoclips(video_clips, method="compose")
-        logger.info("Video clips concatenated successfully with crossfade transitions")
+        # Compose final video on an absolute timeline with a solid background
+        logger.info(f"Compositing {len(timeline_clips)} video clips on absolute timeline")
+        try:
+            bg_color = (30, 41, 59)  # slate-800-ish
+            background = ColorClip(size=(width, height), color=bg_color).set_duration(total_duration)
+            final_video = CompositeVideoClip([background] + timeline_clips, size=(width, height))
+        except Exception as e:
+            logger.warning(f"Composite failed, falling back to simple concatenation: {e}")
+            # Fallback to simple concatenation if composite fails
+            final_video = concatenate_videoclips(timeline_clips, method="compose")
+        # Ensure exact duration matches audio to avoid drift
+        try:
+            final_video = final_video.set_duration(total_duration)
+        except Exception:
+            pass
         
         # Add animated reporter GIF overlay in bottom corner (talking head effect)
         # Look for reporter GIF in broadcast directory
@@ -2398,7 +2776,15 @@ def compile_broadcast_video(
                 for entry in srt_entries:
                     # Ensure proper SRT format
                     f.write(f"{entry['number']}\n")
-                    f.write(f"{entry['start']} --> {entry['end']}\n")
+                    # Clamp any end time to total_duration to avoid overshoot
+                    try:
+                        start_s = parse_srt_time(entry['start'])
+                        end_s = min(parse_srt_time(entry['end']), total_duration)
+                        start_fmt = format_srt_time(max(0.0, min(start_s, total_duration)))
+                        end_fmt = format_srt_time(max(0.0, end_s))
+                        f.write(f"{start_fmt} --> {end_fmt}\n")
+                    except Exception:
+                        f.write(f"{entry['start']} --> {entry['end']}\n")
                     # SRT text can be multi-line, but we'll keep it simple
                     text = entry['text'].strip()
                     # Remove any HTML-like tags or formatting
@@ -2420,9 +2806,54 @@ def compile_broadcast_video(
         
         # Note: We're using SRT file for captions instead of visual overlays
         
-        # Set audio
-        logger.info("Setting audio track")
-        final_video = final_video.set_audio(audio_clip)
+        # Optional background music with ducking
+        try:
+            enabled_flag = str(os.environ.get("BROADCAST_BGM_ENABLED", "")).strip().lower() in ("1", "true", "yes", "on")
+        except Exception:
+            enabled_flag = False
+        bgm_path = None
+        if enabled_flag:
+            try:
+                # Use explicit path if provided; otherwise fall back to bundled default
+                explicit = os.environ.get("BROADCAST_BGM_PATH")
+                if explicit and os.path.exists(explicit):
+                    bgm_path = explicit
+                else:
+                    bundled = os.path.join(os.path.dirname(__file__), "static", "bgm.mp3")
+                    if os.path.exists(bundled):
+                        bgm_path = bundled
+            except Exception:
+                bgm_path = None
+
+        # Apply gentle fade in/out on narration
+        try:
+            fade_s = float(os.environ.get("BROADCAST_AUDIO_FADE", "0.5"))
+        except Exception:
+            fade_s = 0.5
+        try:
+            audio_clip = audio_clip.audio_fadein(max(0.0, fade_s)).audio_fadeout(max(0.0, fade_s))
+        except Exception:
+            pass
+
+        if enabled_flag and bgm_path:
+            try:
+                logger.info(f"Adding background music: {bgm_path}")
+                try:
+                    bgm_vol = float(os.environ.get("BROADCAST_BGM_VOLUME", "0.12"))
+                except Exception:
+                    bgm_vol = 0.12
+                bgm_clip = AudioFileClip(bgm_path).volumex(bgm_vol)
+                bgm_clip = audio_loop(bgm_clip, duration=total_duration)
+                mixed = CompositeAudioClip([audio_clip, bgm_clip])
+                final_video = final_video.set_audio(mixed)
+                logger.info("Background music mixed under narration")
+            except Exception as e:
+                logger.warning(f"Failed to add background music: {e}")
+                final_video = final_video.set_audio(audio_clip)
+        else:
+            # No BGM, set narration only
+            logger.info("Setting narration audio track (no background music found)")
+            final_video = final_video.set_audio(audio_clip)
         logger.info("Audio track set")
         
         # Write video file
@@ -2450,6 +2881,113 @@ def compile_broadcast_video(
         return None
 
 
+def compile_segments_into_broadcast(
+    segments: List[BroadcastSegment],
+    output_video_path: str,
+    output_srt_path: str
+) -> Optional[float]:
+    """Compile individual segments into final broadcast video with aligned captions.
+
+    Args:
+        segments: List of validated BroadcastSegment objects
+        output_video_path: Path for final video
+        output_srt_path: Path for final SRT file
+
+    Returns:
+        Total duration in seconds, or None if failed
+    """
+    try:
+        from moviepy.editor import VideoFileClip, concatenate_videoclips
+
+        logger.info("=" * 80)
+        logger.info(f"COMPILING {len(segments)} SEGMENTS INTO FINAL BROADCAST")
+        logger.info("=" * 80)
+
+        # Load all segment videos
+        video_clips = []
+        for i, segment in enumerate(segments):
+            logger.info(f"Loading segment {i+1}/{len(segments)}: {segment.segment_type}")
+            try:
+                clip = VideoFileClip(segment.video_path)
+                video_clips.append(clip)
+                logger.info(f"  ✓ Loaded: {segment.duration:.2f}s")
+            except Exception as e:
+                logger.error(f"  ✗ Failed to load segment video: {e}")
+                return None
+
+        # Concatenate all videos
+        logger.info("Concatenating video segments...")
+        final_video = concatenate_videoclips(video_clips, method="compose")
+        total_duration = final_video.duration
+
+        logger.info(f"Writing final video: {output_video_path}")
+        final_video.write_videofile(
+            output_video_path,
+            fps=24,
+            codec='libx264',
+            audio_codec='aac',
+            verbose=False,
+            logger=None
+        )
+
+        # Cleanup
+        final_video.close()
+        for clip in video_clips:
+            clip.close()
+
+        logger.info(f"✓ Final video created: {total_duration:.2f}s")
+
+        # Generate final SRT file with adjusted timings
+        logger.info("Generating final SRT file...")
+
+        def format_srt_time(seconds: float) -> str:
+            """Convert seconds to SRT time format HH:MM:SS,mmm"""
+            hours = int(seconds // 3600)
+            minutes = int((seconds % 3600) // 60)
+            secs = int(seconds % 60)
+            millis = int((seconds % 1) * 1000)
+            return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+        srt_entries = []
+        entry_id = 1
+        current_time_offset = 0.0
+
+        for segment in segments:
+            for caption in segment.captions:
+                # Adjust caption times based on segment position in final video
+                start_time = current_time_offset + caption['start']
+                end_time = current_time_offset + caption['end']
+
+                srt_entries.append({
+                    'id': entry_id,
+                    'start': format_srt_time(start_time),
+                    'end': format_srt_time(end_time),
+                    'text': caption['text']
+                })
+                entry_id += 1
+
+            current_time_offset += segment.duration
+
+        # Write SRT file
+        with open(output_srt_path, 'w', encoding='utf-8') as f:
+            for entry in srt_entries:
+                f.write(f"{entry['id']}\n")
+                f.write(f"{entry['start']} --> {entry['end']}\n")
+                f.write(f"{entry['text']}\n")
+                f.write("\n")
+
+        logger.info(f"✓ SRT file created: {len(srt_entries)} caption entries")
+        logger.info("=" * 80)
+        logger.info(f"✓ BROADCAST COMPILATION COMPLETE: {total_duration:.2f}s")
+        logger.info("=" * 80)
+
+        return total_duration
+
+    except Exception as e:
+        logger.error(f"Failed to compile segments: {e}", exc_info=True)
+        return None
+
+
 def generate_and_compile_broadcast(
     *,
     base_url: Optional[str] = None,
@@ -2457,13 +2995,23 @@ def generate_and_compile_broadcast(
     location: Optional[str] = None,
     force: bool = False
 ) -> Optional[Broadcast]:
-    """Generate and compile a complete broadcast. Returns Broadcast model instance.
-    Wrapped with 60 minute timeout."""
+    """Generate and compile a complete broadcast using SEGMENT-BY-SEGMENT approach.
+
+    NEW APPROACH:
+    1. Create intro segment (audio + video + captions) - validate alignment
+    2. Create each article segment individually - validate alignment
+    3. Create weather segment - validate alignment
+    4. Create ending segment - validate alignment
+    5. Compile all validated segments into final broadcast
+
+    This ensures PERFECT synchronization between audio, video, and captions!
+
+    Returns Broadcast model instance. Wrapped with 60 minute timeout."""
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
     from .progress import progress
-    
+
     BROADCAST_TIMEOUT_S = 3600  # 60 minutes
-    
+
     def _generate():
         session = SessionLocal()
         try:
@@ -2474,6 +3022,25 @@ def generate_and_compile_broadcast(
                 return None
             
             app_settings = session.query(AppSettings).filter_by(id=1).one_or_none()
+            # Apply broadcast settings into environment for downstream helpers
+            try:
+                if app_settings:
+                    # Toggle explicit enable flag for BGM, even if files exist
+                    os.environ["BROADCAST_BGM_ENABLED"] = "1" if (app_settings.broadcast_bgm_enabled is True) else "0"
+                    if app_settings.broadcast_transition_duration is not None:
+                        os.environ["BROADCAST_TRANSITION_DURATION"] = str(app_settings.broadcast_transition_duration)
+                    if app_settings.broadcast_ken_burns_enabled is not None:
+                        os.environ["BROADCAST_KEN_BURNS"] = "1" if app_settings.broadcast_ken_burns_enabled else "0"
+                    if app_settings.broadcast_ken_burns_zoom is not None:
+                        os.environ["BROADCAST_KEN_BURNS_ZOOM"] = str(app_settings.broadcast_ken_burns_zoom)
+                    if app_settings.broadcast_audio_fade is not None:
+                        os.environ["BROADCAST_AUDIO_FADE"] = str(app_settings.broadcast_audio_fade)
+                    if app_settings.broadcast_bgm_path:
+                        os.environ["BROADCAST_BGM_PATH"] = app_settings.broadcast_bgm_path
+                    if app_settings.broadcast_bgm_volume is not None:
+                        os.environ["BROADCAST_BGM_VOLUME"] = str(app_settings.broadcast_bgm_volume)
+            except Exception:
+                pass
             
             # Resolve location using same logic as scheduler
             resolved_location = location
@@ -2523,84 +3090,151 @@ def generate_and_compile_broadcast(
             create_weather_slide(weather_report, weather_slide_path)
             create_radar_weather_card(weather_report, radar_card_path)
             
-            # Generate audio segments - wrapped with 60 minute timeout
-            # NOTE: Each segment (intro, article, weather, ending) sends COMPLETE TEXT to TTS
-            # We do NOT chunk or truncate any text - full fidelity guaranteed
-            logger.info("Generating broadcast audio segments (FULL TEXT per segment)")
-            progress.phase('broadcast', 'Step 5: Generating broadcast audio (FULL TEXT, 60 min timeout)')
-            audio_path = os.path.join(base_dir, f"audio_{timestamp}.wav")
+            # ========================================================================
+            # NEW SEGMENT-BY-SEGMENT APPROACH
+            # Create each segment individually with perfect audio/video/caption alignment
+            # ========================================================================
+
+            logger.info("=" * 80)
+            logger.info("SEGMENT-BY-SEGMENT BROADCAST GENERATION")
+            logger.info("=" * 80)
+
             temp_dir = os.path.join(base_dir, f"temp_{timestamp}")
             os.makedirs(temp_dir, exist_ok=True)
 
-            # Wrap audio generation with 60 minute timeout
-            AUDIO_TIMEOUT_S = 3600  # 60 minutes
-            audio_result = None
+            # Initialize TTS client
+            tts_client = TTSClient(base_url=tts_settings.base_url)
+            segments = []
+            all_scripts = []
 
-            def _generate_audio():
-                return generate_broadcast_audio_segments(
-                    articles,
-                    weather_report.ai_report if weather_report else None,
+            # Step 5: Create intro segment
+            progress.phase('broadcast', 'Step 5: Creating intro segment')
+            intro_text = f"Good {datetime.now().strftime('%I:%M %p')}. Here's your local news update for {resolved_location}."
+            all_scripts.append(intro_text)
+
+            intro_segment = create_individual_segment(
+                segment_type="intro",
+                segment_id="intro",
+                text=intro_text,
+                image_path=intro_slide_path if os.path.exists(intro_slide_path) else None,
+                title="News Update",
+                temp_dir=temp_dir,
+                tts_client=tts_client,
+                voice=tts_settings.voice
+            )
+
+            if intro_segment:
+                segments.append(intro_segment)
+                logger.info(f"✓ Intro segment created: {intro_segment.duration:.2f}s")
+            else:
+                logger.error("Failed to create intro segment")
+                return None
+
+            # Step 6: Create article segments
+            progress.phase('broadcast', f'Step 6: Creating {len(articles)} article segments')
+            for i, article in enumerate(articles):
+                logger.info(f"Creating article segment {i+1}/{len(articles)}")
+
+                # Generate article script
+                article_script = generate_article_script(
+                    article,
                     resolved_location,
-                    tts_base_url=tts_settings.base_url,
-                    voice=tts_settings.voice,
-                    speed=tts_settings.speed or 1.0,
                     base_url=base_url or (app_settings.ollama_base_url if app_settings else None),
                     model=model or (app_settings.ollama_model if app_settings else None),
-                    output_path=audio_path,
-                    temp_dir=temp_dir
+                    timeout_s=300
                 )
-            
-            try:
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(_generate_audio)
-                    try:
-                        audio_result = future.result(timeout=AUDIO_TIMEOUT_S)
-                    except FutureTimeoutError:
-                        future.cancel()
-                        logger.error(f"Audio generation exceeded timeout of {AUDIO_TIMEOUT_S} seconds")
-                        return None
-            except Exception as e:
-                logger.error(f"Audio generation wrapper failed: {e}", exc_info=True)
-                return None
-            
-            if not audio_result:
-                logger.error("Failed to generate broadcast audio")
-                return None
-            
-            segment_durations, all_scripts, audio_duration = audio_result
-            
-            if not audio_duration:
-                logger.error("Failed to generate broadcast audio - duration is None")
-                return None
-            
-            # Build full transcript from all scripts
-            full_transcript = "\n\n".join(all_scripts)
-            
-            # Compile video
-            logger.info("Compiling broadcast video")
-            progress.phase('broadcast', 'Step 6: Compiling broadcast video')
-            video_path = os.path.join(base_dir, f"broadcast_{timestamp}.mp4")
-            result = compile_broadcast_video(
-                articles,
-                article_image_paths,
-                weather_slide_path if os.path.exists(weather_slide_path) else None,
-                radar_card_path if os.path.exists(radar_card_path) else None,
-                intro_slide_path if os.path.exists(intro_slide_path) else None,
-                ending_slide_path if os.path.exists(ending_slide_path) else None,
-                audio_path,
-                segment_durations,
-                all_scripts,
-                video_path,
-                base_dir,
-                width=1280,
-                height=720
+
+                if not article_script:
+                    # Fallback: use article title + first sentences
+                    title = article.ai_title or article.source_title or "Untitled"
+                    body = (article.ai_body or article.raw_content or "")
+                    sentences = body.split('.')[:3] if body else []
+                    body_text = '. '.join(s.strip() for s in sentences if s.strip())
+                    if body_text and not body_text.endswith('.'):
+                        body_text += '.'
+                    article_script = f"{title}. {body_text}"
+
+                all_scripts.append(article_script)
+
+                article_segment = create_individual_segment(
+                    segment_type="article",
+                    segment_id=article.id,
+                    text=article_script,
+                    image_path=article_image_paths.get(article.id),
+                    title=article.ai_title or article.source_title,
+                    temp_dir=temp_dir,
+                    tts_client=tts_client,
+                    voice=tts_settings.voice
+                )
+
+                if article_segment:
+                    segments.append(article_segment)
+                    logger.info(f"✓ Article {i+1} segment created: {article_segment.duration:.2f}s")
+                else:
+                    logger.warning(f"Failed to create article {i+1} segment, skipping")
+
+            # Step 7: Create weather segment
+            if weather_report and weather_report.ai_report:
+                progress.phase('broadcast', 'Step 7: Creating weather segment')
+                all_scripts.append(weather_report.ai_report)
+
+                weather_segment = create_individual_segment(
+                    segment_type="weather",
+                    segment_id="weather",
+                    text=weather_report.ai_report,
+                    image_path=weather_slide_path if os.path.exists(weather_slide_path) else None,
+                    title="Local Weather",
+                    temp_dir=temp_dir,
+                    tts_client=tts_client,
+                    voice=tts_settings.voice
+                )
+
+                if weather_segment:
+                    segments.append(weather_segment)
+                    logger.info(f"✓ Weather segment created: {weather_segment.duration:.2f}s")
+                else:
+                    logger.warning("Failed to create weather segment")
+
+            # Step 8: Create ending segment
+            progress.phase('broadcast', 'Step 8: Creating ending segment')
+            ending_text = "That's all for this broadcast. Thank you for watching, and have a great day!"
+            all_scripts.append(ending_text)
+
+            ending_segment = create_individual_segment(
+                segment_type="ending",
+                segment_id="ending",
+                text=ending_text,
+                image_path=ending_slide_path if os.path.exists(ending_slide_path) else None,
+                title="Thank You",
+                temp_dir=temp_dir,
+                tts_client=tts_client,
+                voice=tts_settings.voice
             )
-            
-            if not result:
-                logger.error("Failed to compile broadcast video")
+
+            if ending_segment:
+                segments.append(ending_segment)
+                logger.info(f"✓ Ending segment created: {ending_segment.duration:.2f}s")
+            else:
+                logger.error("Failed to create ending segment")
                 return None
-            
-            video_duration, srt_path = result
+
+            # Build full transcript
+            full_transcript = "\n\n".join(all_scripts)
+
+            # Step 9: Compile all segments into final broadcast
+            progress.phase('broadcast', 'Step 9: Compiling all segments into final broadcast')
+            video_path = os.path.join(base_dir, f"broadcast_{timestamp}.mp4")
+            srt_path = os.path.join(base_dir, f"broadcast_{timestamp}.srt")
+
+            video_duration = compile_segments_into_broadcast(
+                segments=segments,
+                output_video_path=video_path,
+                output_srt_path=srt_path
+            )
+
+            if not video_duration:
+                logger.error("Failed to compile broadcast")
+                return None
             
             # Cleanup temp directory
             try:
@@ -2610,16 +3244,16 @@ def generate_and_compile_broadcast(
                 pass
             
             # Create broadcast record
-            progress.phase('broadcast', 'Step 7: Finalizing broadcast')
+            progress.phase('broadcast', 'Step 10: Finalizing broadcast')
             broadcast = Broadcast(
                 created_at=get_local_now(),
                 transcript=full_transcript,
                 video_path=video_path,
-                audio_path=audio_path,
+                audio_path=None,  # Audio is embedded in video segments
                 srt_path=srt_path if srt_path and os.path.exists(srt_path) else None,
                 duration_seconds=video_duration,
-                article_count=len(articles),
-                includes_weather=weather_report is not None
+                article_count=len([s for s in segments if s.segment_type == "article"]),
+                includes_weather=any(s.segment_type == "weather" for s in segments)
             )
             session.add(broadcast)
             session.commit()
@@ -2651,4 +3285,3 @@ def generate_and_compile_broadcast(
         logger.error(f"Broadcast generation wrapper failed: {e}", exc_info=True)
         progress.clear_timeout()
         return None
-

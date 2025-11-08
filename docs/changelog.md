@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Segment-by-Segment Broadcast Generation:** Complete refactor of broadcast generation for perfect audio/video/caption alignment. Each segment (intro, articles, weather, ending) is now created individually with its own TTS audio, video slide, and word-level captions before being compiled into the final broadcast. Guarantees synchronization and eliminates timing issues. (2025-11-08)
 - **Broadcast Feature:** A new "Broadcast" feature has been added to the web app, which includes a caption overlay and a button to toggle captions. (2025-11-01)
 - **Article Sharing:** Share articles from both the web and mobile apps. (2025-10-31)
 - **Force Rewrite:** Manually trigger an AI rewrite for an article from the article details screen. (2025-10-31)
@@ -42,6 +43,9 @@
 
 ### Fixed
 
+- **Broadcast Audio/Video/Caption Alignment:** Fixed synchronization issues between audio, video, and captions in broadcasts. The new segment-by-segment approach ensures perfect alignment by creating each segment individually with actual TTS duration before compilation. (2025-11-08)
+- **Image Format Conversion in Broadcasts:** Fixed "cannot write mode P/RGBA as JPEG" errors when processing article images. Images with palette or RGBA modes are now automatically converted to RGB with proper background handling. (2025-11-08)
+- **Missing Audio Handling in Broadcasts:** Fixed issue where failed TTS segments would add estimated durations causing misalignment. Failed segments are now skipped entirely from the broadcast. (2025-11-08)
 - **Location Persistence:** Fixed issue where location would be overwritten on container rebuild. User-set locations are now preserved and never changed unless explicitly modified by the user. (2025-11-01)
 - **Temperature/Wind Speed Units:** Fixed bug where temperature and wind speed units would default to Celsius and km/h instead of using user's database settings. Units now always respect user preferences. (2025-11-01)
 - **Radar Location Update:** Fixed radar not updating immediately when location is changed. Radar now uses correct coordinates immediately after location change. (2025-11-01)

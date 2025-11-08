@@ -76,6 +76,25 @@ def init_db():
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN quality_threshold FLOAT"))
                 conn.commit()
                 logger.info("Added quality_threshold column to app_settings table")
+
+            # Broadcast settings migrations
+            bcast_cols = {
+                "broadcast_bgm_enabled": "ALTER TABLE app_settings ADD COLUMN broadcast_bgm_enabled BOOLEAN",
+                "broadcast_bgm_path": "ALTER TABLE app_settings ADD COLUMN broadcast_bgm_path VARCHAR(1000)",
+                "broadcast_bgm_volume": "ALTER TABLE app_settings ADD COLUMN broadcast_bgm_volume FLOAT",
+                "broadcast_audio_fade": "ALTER TABLE app_settings ADD COLUMN broadcast_audio_fade FLOAT",
+                "broadcast_transition_duration": "ALTER TABLE app_settings ADD COLUMN broadcast_transition_duration FLOAT",
+                "broadcast_ken_burns_enabled": "ALTER TABLE app_settings ADD COLUMN broadcast_ken_burns_enabled BOOLEAN",
+                "broadcast_ken_burns_zoom": "ALTER TABLE app_settings ADD COLUMN broadcast_ken_burns_zoom FLOAT",
+            }
+            for col, ddl in bcast_cols.items():
+                if col not in columns:
+                    try:
+                        conn.execute(text(ddl))
+                        conn.commit()
+                        logger.info(f"Added {col} column to app_settings table")
+                    except Exception as e:
+                        logger.warning(f"Failed to add column {col}: {e}")
             
             # Migration: Add srt_path column to broadcasts table if it doesn't exist
             result = conn.execute(text("PRAGMA table_info(broadcasts)"))

@@ -83,6 +83,18 @@ RUN APK_FOUND="" && \
         touch /app/app/static/news-ai-app.apk || true; \
     fi
 
+# Generate a royalty-free ambient background music MP3 (procedurally, no network)
+# Soft triad sine tones mixed and encoded to MP3 for ~90 seconds
+RUN set -eux; \
+    if [ ! -f /app/app/static/bgm.mp3 ]; then \
+      ffmpeg -hide_banner -loglevel error \
+        -f lavfi -i sine=frequency=261.63:duration=90:sample_rate=48000 \
+        -f lavfi -i sine=frequency=329.63:duration=90:sample_rate=48000 \
+        -f lavfi -i sine=frequency=392.00:duration=90:sample_rate=48000 \
+        -filter_complex "amix=inputs=3:normalize=0, volume=0.08, aformat=sample_fmts=s16:sample_rates=44100:channel_layouts=stereo" \
+        -c:a libmp3lame -q:a 5 /app/app/static/bgm.mp3 || true; \
+    fi
+
 # SQLite data path
 RUN mkdir -p /data
 VOLUME ["/data"]

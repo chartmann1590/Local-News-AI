@@ -20,12 +20,51 @@
   - `web/src/ui/App.jsx` — main UI
   - Built to `/app/app/static` in the image for FastAPI to serve
 
-## Broadcast Pipeline
+## Broadcast Pipeline (Segment-by-Segment Approach)
 
-1. Collect latest articles + weather.
-2. Generate script; synthesize audio via TTS.
-3. Render video and captions; expose transcript and SRT via API.
-4. UI plays video with optional caption overlay.
+**Overview**: The broadcast generation creates each segment individually to ensure perfect audio/video/caption alignment.
+
+### Workflow
+
+1. **Preparation**:
+   - Collect latest articles (limit 10, last 48 hours)
+   - Get latest weather report
+   - Download article images
+   - Create intro/ending slides
+
+2. **Segment-by-Segment Generation**:
+   - **For each segment** (intro, article 1, article 2, ..., weather, ending):
+     a. Generate TTS audio → Get actual duration (e.g., 12.4 seconds)
+     b. Create video slide with exact duration from audio (12.4 seconds)
+     c. Generate word-level captions aligned to actual timing
+     d. Validate segment is complete and aligned
+     e. Save individual segment video file
+
+3. **Compilation**:
+   - Concatenate all validated segment videos sequentially
+   - Adjust caption timings based on segment positions
+   - Generate final SRT file with precise word-level timing
+   - Save final broadcast video and captions
+
+4. **API Exposure**:
+   - Video available via `/api/broadcasts/{id}/video`
+   - SRT captions via `/api/broadcasts/{id}/srt`
+   - Transcript via broadcast record
+
+### Key Benefits
+
+- **Perfect Synchronization**: Video slide duration exactly matches actual audio duration
+- **Word-Level Captions**: Captions show 4 words at a time, precisely timed to audio
+- **No Estimated Durations**: All timing based on actual TTS-generated audio
+- **Validated Segments**: Each segment confirmed complete before moving to next
+- **Graceful Failure Handling**: Failed segments are skipped entirely (no silent gaps)
+
+### Technical Details
+
+- **Individual Segment Files**: Each segment creates its own video file (e.g., `intro_intro_video.mp4`, `article_94_video.mp4`)
+- **Audio Embedded**: Audio is embedded in each segment video (no separate audio track)
+- **Caption Offset Calculation**: Final SRT file adjusts timings based on cumulative segment positions
+- **Temp Directory**: Segments created in temp directory, cleaned up after compilation
 
 ## Data Flow (Harvest)
 

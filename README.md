@@ -12,7 +12,7 @@
 *   **💬 AI Comments:** Engage in a conversation with the AI about each article.
 *   **⭐ Article Bookmarking:** Save your favorite articles for later reading.
 *   **🔍 Search and Filtering:** Easily find articles with keyword search and source filtering.
-*   **📺 Broadcast:** A new feature to broadcast news and weather updates.
+*   **📺 Broadcast:** Generate professional news videos with AI narration, weather reports, and word-level synchronized captions using our new segment-by-segment approach for perfect audio/video alignment.
 *   **📤 Article Sharing:** Share articles from both the web and mobile apps.
 *   **🧾 Mobile Log Viewer:** Upload and review logs from the Android app for troubleshooting.
 *   **📱 Mobile & Web Apps:** Access your news via a web interface (PWA) or a native Android app built with Flutter.

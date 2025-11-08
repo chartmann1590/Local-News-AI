@@ -1439,6 +1439,14 @@ function SettingsPanel({ onClose, reloadAll }) {
     tts_voice: '',
     tts_speed: 1.0,
     fact_checking_enabled: true,
+    // Broadcast settings
+    broadcast_bgm_enabled: false,
+    broadcast_bgm_path: '',
+    broadcast_bgm_volume: 0.12,
+    broadcast_audio_fade: 0.5,
+    broadcast_transition_duration: 0.5,
+    broadcast_ken_burns_enabled: true,
+    broadcast_ken_burns_zoom: 0.03,
   })
   const [models, setModels] = useState([])
   const [testing, setTesting] = useState(false)
@@ -1471,6 +1479,14 @@ function SettingsPanel({ onClose, reloadAll }) {
           tts_voice: ts.voice || '',
           tts_speed: ts.speed || 1.0,
           fact_checking_enabled: s.fact_checking_enabled !== undefined ? s.fact_checking_enabled : true,
+          // Broadcast settings
+          broadcast_bgm_enabled: !!s.broadcast_bgm_enabled,
+          broadcast_bgm_path: s.broadcast_bgm_path || '',
+          broadcast_bgm_volume: (s.broadcast_bgm_volume ?? 0.12),
+          broadcast_audio_fade: (s.broadcast_audio_fade ?? 0.5),
+          broadcast_transition_duration: (s.broadcast_transition_duration ?? 0.5),
+          broadcast_ken_burns_enabled: (s.broadcast_ken_burns_enabled ?? true),
+          broadcast_ken_burns_zoom: (s.broadcast_ken_burns_zoom ?? 0.03),
         }))
         if (s.ollama_base_url) {
           const m = await fetch('/api/ollama/models?base_url=' + encodeURIComponent(s.ollama_base_url)).then(r => r.json())
@@ -1536,6 +1552,14 @@ function SettingsPanel({ onClose, reloadAll }) {
         ollama_fallback_base_url: form.ollama_fallback_base_url,
         temp_unit: form.temp_unit,
         wind_speed_unit: form.wind_speed_unit,
+        // Broadcast settings
+        broadcast_bgm_enabled: !!form.broadcast_bgm_enabled,
+        broadcast_bgm_path: form.broadcast_bgm_path || null,
+        broadcast_bgm_volume: Number(form.broadcast_bgm_volume) || 0.12,
+        broadcast_audio_fade: Number(form.broadcast_audio_fade) || 0.5,
+        broadcast_transition_duration: Number(form.broadcast_transition_duration) || 0.5,
+        broadcast_ken_burns_enabled: !!form.broadcast_ken_burns_enabled,
+        broadcast_ken_burns_zoom: Number(form.broadcast_ken_burns_zoom) || 0.03,
       }) })
       // Persist TTS settings separately
       await fetch('/api/tts/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
@@ -1549,6 +1573,31 @@ function SettingsPanel({ onClose, reloadAll }) {
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('save settings failed', e)
+    }
+  }
+
+  // Broadcast: upload BGM
+  const [bgmUploading, setBgmUploading] = useState(false)
+  const [bgmUploadMsg, setBgmUploadMsg] = useState('')
+  const [bgmFile, setBgmFile] = useState(null)
+  async function uploadBgm() {
+    if (!bgmFile) return
+    setBgmUploading(true)
+    setBgmUploadMsg('')
+    try {
+      const fd = new FormData()
+      fd.append('file', bgmFile)
+      const res = await fetch('/api/broadcast/bgm', { method: 'POST', body: fd })
+      const data = await res.json().catch(()=>null)
+      if (!res.ok) throw new Error((data && data.error) || 'upload failed')
+      setBgmUploadMsg('Uploaded successfully')
+      setForm(f => ({ ...f, broadcast_bgm_enabled: true, broadcast_bgm_path: (data && data.path) || f.broadcast_bgm_path }))
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('bgm upload failed', e)
+      setBgmUploadMsg('Upload failed')
+    } finally {
+      setBgmUploading(false)
     }
   }
 
@@ -1690,6 +1739,35 @@ function SettingsPanel({ onClose, reloadAll }) {
           </section>
 
           <section>
+            <div className="font-medium mb-2">Broadcast</div>
+            <div className="space-y-3">
+              <label className="inline-flex items-center gap-2"><input type="checkbox" checked={!!form.broadcast_bgm_enabled} onChange={e=>setForm(f=>({...f, broadcast_bgm_enabled: e.target.checked}))}/> <span>Enable Background Music</span></label>
+              {form.broadcast_bgm_enabled && (
+                <div className="flex items-center gap-3 flex-wrap">
+                  <input type="file" accept="audio/mpeg,audio/mp3,audio/wav" onChange={e=>setBgmFile(e.target.files?.[0]||null)} className="text-sm" />
+                  <button onClick={uploadBgm} disabled={bgmUploading || !bgmFile} className="px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700">{bgmUploading ? 'Uploading…' : 'Upload'}</button>
+                  {form.broadcast_bgm_path && <span className="text-xs text-slate-500">Current: {form.broadcast_bgm_path}</span>}
+                  {bgmUploadMsg && <span className="text-xs text-slate-500">{bgmUploadMsg}</span>}
+                </div>
+              )}
+              <div className="flex items-center gap-3 flex-wrap">
+                <label className="text-slate-500">BGM Volume</label>
+                <input type="number" step="0.01" min="0" max="1" value={form.broadcast_bgm_volume} onChange={e=>setForm(f=>({...f, broadcast_bgm_volume: e.target.value}))} className="w-24 px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700" />
+                <label className="text-slate-500">Transition (s)</label>
+                <input type="number" step="0.1" min="0" max="3" value={form.broadcast_transition_duration} onChange={e=>setForm(f=>({...f, broadcast_transition_duration: e.target.value}))} className="w-24 px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700" />
+                <label className="text-slate-500">Audio Fade (s)</label>
+                <input type="number" step="0.1" min="0" max="5" value={form.broadcast_audio_fade} onChange={e=>setForm(f=>({...f, broadcast_audio_fade: e.target.value}))} className="w-24 px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700" />
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <label className="inline-flex items-center gap-2"><input type="checkbox" checked={!!form.broadcast_ken_burns_enabled} onChange={e=>setForm(f=>({...f, broadcast_ken_burns_enabled: e.target.checked}))}/> <span>Enable Ken Burns</span></label>
+                <label className="text-slate-500">Zoom</label>
+                <input type="number" step="0.01" min="0" max="0.2" value={form.broadcast_ken_burns_zoom} onChange={e=>setForm(f=>({...f, broadcast_ken_burns_zoom: e.target.value}))} className="w-24 px-2 py-1.5 rounded-md border border-slate-300 dark:border-slate-700" />
+              </div>
+              <div className="text-xs text-slate-500">Tip: Background music is optional. A default ambient track is bundled; you can upload your own here.</div>
+            </div>
+          </section>
+
+          <section>
             <div className="font-medium mb-2">AI Fact-Checking</div>
             <div className="rounded-lg border border-slate-200/60 dark:border-slate-700/60 bg-slate-50 dark:bg-slate-800 p-3">
               <div className="flex items-center gap-3 mb-2">
@@ -1821,4 +1899,3 @@ function SettingsPanel({ onClose, reloadAll }) {
     </div>
   )
 }
-
